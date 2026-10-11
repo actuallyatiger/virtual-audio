@@ -38,7 +38,11 @@ function attempt(promise) {
 
 function el(tag, props = {}, ...children) {
   const node = document.createElement(tag);
-  Object.assign(node, props);
+  for (const [key, value] of Object.entries(props)) {
+    // Hyphenated names (aria-label, data-*) only exist as attributes.
+    if (key.includes("-")) node.setAttribute(key, value);
+    else node[key] = value;
+  }
   node.append(...children);
   return node;
 }
