@@ -144,6 +144,9 @@ fn init_logging(verbose: bool) {
     let file = cfg!(all(windows, not(debug_assertions)))
         .then(|| {
             let _ = std::fs::create_dir_all(config::data_dir());
+            // Keep the previous run's log: after a crash, that is the one
+            // that matters, and relaunching would otherwise overwrite it.
+            let _ = std::fs::rename(log_path(), log_path().with_extension("previous.txt"));
             std::fs::File::create(log_path()).ok()
         })
         .flatten();
