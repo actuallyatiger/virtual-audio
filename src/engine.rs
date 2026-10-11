@@ -87,6 +87,7 @@ struct Inner {
     output: Option<Worker>,
     output_status: SharedStatus,
     dirty: bool,
+    save_error: Option<String>,
 }
 
 pub struct Engine {
@@ -152,6 +153,7 @@ impl Engine {
                 output: None,
                 output_status: Arc::new(Mutex::new(Status::default())),
                 dirty: false,
+                save_error: None,
             }),
             master,
             mixer,
@@ -575,9 +577,19 @@ impl Engine {
             self.changed.send_modify(|v| *v += 1);
         }
         if inner.dirty {
-            inner.dirty = false;
-            if let Err(e) = inner.config.save() {
-                tracing::error!("saving config: {e}");
+            // On failure stay dirty and retry next tick; log each new error once.
+            match inner.config.save() {
+                Ok(()) => {
+                    inner.dirty = false;
+                    inner.save_error = None;
+                }
+                Err(e) => {
+                    let msg = format!("{e:#}");
+                    if inner.save_error.as_ref() != Some(&msg) {
+                        tracing::error!("saving config: {msg}");
+                        inner.save_error = Some(msg);
+                    }
+                }
             }
         }
     }
