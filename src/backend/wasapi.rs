@@ -312,23 +312,33 @@ fn activate_process_loopback(pid: u32) -> anyhow::Result<IAudioClient> {
     ensure_com();
     tracing::info!("activating process loopback for PID {pid}");
     unsafe {
-        let mut params = AUDIOCLIENT_ACTIVATION_PARAMS {
-            ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
-            Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
-                ProcessLoopbackParams: AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
-                    TargetProcessId: pid,
-                    ProcessLoopbackMode: PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
+        // The activation PROPVARIANT and the params its blob points at must
+        // outlive the async operation, which may still run after a timeout,
+        // so they live on the heap and are leaked rather than freed then.
+        // PROPVARIANT's Drop would PropVariantClear (CoTaskMemFree) the blob,
+        // which we own, so it is never dropped either.
+        struct Activation {
+            params: AUDIOCLIENT_ACTIVATION_PARAMS,
+            prop: std::mem::ManuallyDrop<PROPVARIANT>,
+        }
+        let mut activation = Box::new(Activation {
+            params: AUDIOCLIENT_ACTIVATION_PARAMS {
+                ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
+                Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
+                    ProcessLoopbackParams: AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
+                        TargetProcessId: pid,
+                        ProcessLoopbackMode: PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
+                    },
                 },
             },
-        };
-        // PROPVARIANT's Drop calls PropVariantClear, which would CoTaskMemFree
-        // the blob. It points at `params` on our stack, so never drop it.
-        let mut prop = std::mem::ManuallyDrop::new(PROPVARIANT::default());
+            prop: std::mem::ManuallyDrop::new(PROPVARIANT::default()),
+        });
+        let params_ptr = &mut activation.params as *mut AUDIOCLIENT_ACTIVATION_PARAMS as *mut u8;
         {
-            let inner = &mut *prop.Anonymous.Anonymous;
+            let inner = &mut *activation.prop.Anonymous.Anonymous;
             inner.vt = VT_BLOB;
             inner.Anonymous.blob.cbSize = size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>() as u32;
-            inner.Anonymous.blob.pBlobData = &mut params as *mut _ as *mut u8;
+            inner.Anonymous.blob.pBlobData = params_ptr;
         }
 
         let done = Event::new()?;
@@ -339,11 +349,13 @@ fn activate_process_loopback(pid: u32) -> anyhow::Result<IAudioClient> {
         let op = ActivateAudioInterfaceAsync(
             VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
             &IAudioClient::IID,
-            Some(&*prop),
+            Some(&*activation.prop),
             &handler,
         )?;
         if !done.wait(5_000)? {
-            // The handler may still fire later; keep its event handle valid.
+            // The operation may still complete later: keep everything it can
+            // touch (params, PROPVARIANT, event handle) alive for good.
+            Box::leak(activation);
             std::mem::forget(done);
             bail!("timed out activating process loopback");
         }
