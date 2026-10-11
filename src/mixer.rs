@@ -152,6 +152,8 @@ impl Mixer {
                     continue;
                 }
                 input.primed = true;
+                // Fade in from silence rather than starting mid-waveform.
+                input.current_gain = 0.0;
             }
             if avail > MAX_FRAMES {
                 let skip = (avail - PRIME_FRAMES) * CHANNELS;
@@ -171,7 +173,9 @@ impl Mixer {
             }
             buf[n..].fill(0.0);
             if n < out.len() {
-                // Underrun: wait until we have a cushion again.
+                // Underrun: fade out what we have instead of cutting off, then
+                // wait until there is a cushion again (and fade back in).
+                fade_out_tail(&mut buf[..n]);
                 input.primed = false;
             }
 
@@ -227,6 +231,22 @@ fn apply_ramped(src: &[f32], from: f32, to: f32, out: &mut [f32]) {
     }
 }
 
+/// Ramps the last (up to) 1 ms of interleaved audio down to silence.
+fn fade_out_tail(buf: &mut [f32]) {
+    let frames = buf.len() / CHANNELS;
+    let fade = frames.min(SAMPLE_RATE as usize / 1000);
+    let start = frames - fade;
+    for (i, frame) in buf.as_chunks_mut::<CHANNELS>().0[start..]
+        .iter_mut()
+        .enumerate()
+    {
+        let g = 1.0 - (i + 1) as f32 / fade as f32;
+        for s in frame {
+            *s *= g;
+        }
+    }
+}
+
 /// Linear up to 0.8, then smoothly saturates towards 1.0.
 fn soft_clip(x: f32) -> f32 {
     const KNEE: f32 = 0.8;
@@ -263,6 +283,8 @@ mod tests {
 
         feed(&mut tx1, 960, 0.2);
         feed(&mut tx2, 2000, 0.4);
+        mixer.process(&mut out);
+        assert!(out[0].abs() < 0.01, "fades in after priming");
         mixer.process(&mut out);
         for s in &out {
             assert!((s - 0.4).abs() < 1e-6, "0.2*1 + 0.4*0.5, got {s}");
@@ -315,6 +337,34 @@ mod tests {
         let mut out = vec![0.0; 480 * CHANNELS];
         mixer.process(&mut out);
         assert_eq!(tx.slots(), RING_SAMPLES - (PRIME_FRAMES - 480) * CHANNELS);
+    }
+
+    #[test]
+    fn underrun_fades_out_then_back_in() {
+        let master = Arc::new(ChannelControl::new(1.0, false));
+        let mut mixer = Mixer::new(master);
+        let (mut tx, rx) = source_ring();
+        mixer.set_input("a", Arc::new(ChannelControl::new(1.0, false)), rx);
+        let mut out = vec![0.0; 480 * CHANNELS];
+
+        feed(&mut tx, PRIME_FRAMES + 200, 0.5);
+        mixer.process(&mut out); // primes, fades in (680 frames left)
+        mixer.process(&mut out); // 200 left
+        mixer.process(&mut out); // only 200 frames for 480: underrun
+        assert!(
+            (out[100 * CHANNELS] - 0.5).abs() < 1e-6,
+            "audio before the fade is intact"
+        );
+        assert!(
+            out[199 * CHANNELS].abs() < 0.01,
+            "faded out at the end of the data"
+        );
+        assert!(out[300 * CHANNELS..].iter().all(|&s| s == 0.0));
+
+        feed(&mut tx, PRIME_FRAMES, 0.5);
+        mixer.process(&mut out); // re-primed
+        assert!(out[0].abs() < 0.01, "fades back in");
+        assert!((out[out.len() - 1] - 0.5).abs() < 1e-6);
     }
 
     #[test]
