@@ -188,7 +188,7 @@ impl Mixer {
         let start = self.master_gain;
         let step = (target - start) / frames as f32;
         let mut peak = 0f32;
-        for (f, frame) in out.chunks_exact_mut(CHANNELS).enumerate() {
+        for (f, frame) in out.as_chunks_mut::<CHANNELS>().0.iter_mut().enumerate() {
             let g = start + step * (f + 1) as f32;
             for s in frame {
                 *s = soft_clip(*s * g);
@@ -214,8 +214,10 @@ fn apply_ramped(src: &[f32], from: f32, to: f32, out: &mut [f32]) {
     }
     let step = (to - from) / frames as f32;
     for (f, (o, s)) in out
-        .chunks_exact_mut(CHANNELS)
-        .zip(src.chunks_exact(CHANNELS))
+        .as_chunks_mut::<CHANNELS>()
+        .0
+        .iter_mut()
+        .zip(src.as_chunks::<CHANNELS>().0)
         .enumerate()
     {
         let g = from + step * (f + 1) as f32;
