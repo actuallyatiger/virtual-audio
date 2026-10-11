@@ -234,7 +234,7 @@ function renderStrips() {
     p.detail.title = ch.detail;
     if (ch.status && p.status.isConnected !== false) {
       p.status.className = `status ${ch.status.state}`;
-      p.status.textContent = ch.status.state === "running" ? "Live" : ch.status.message;
+      p.status.textContent = ch.status.state === "running" ? `Live · ${ch.status.message}` : ch.status.message;
       p.status.title = ch.status.message;
     }
     if (!p.dragging && document.activeElement !== p.gain) {

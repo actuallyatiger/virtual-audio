@@ -28,6 +28,11 @@ impl Backend for Dummy {
                 name: "Line In (Dummy)".into(),
                 is_default: false,
             },
+            DeviceInfo {
+                id: "dummy-cable-out".into(),
+                name: "CABLE Output (VB-Audio Virtual Cable)".into(),
+                is_default: false,
+            },
         ])
     }
 
