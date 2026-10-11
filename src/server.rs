@@ -124,20 +124,22 @@ async fn state(State(app): State<App>) -> Json<serde_json::Value> {
     Json(full_state(&app.engine))
 }
 
-/// Runs a blocking backend query off the async executor.
+/// Runs blocking engine/backend work off the async executor. Errors from
+/// `f` map to `status` (400 for invalid input, 500 for backend failures).
 async fn blocking<T: Send + 'static>(
     app: &App,
+    status: StatusCode,
     f: impl FnOnce(&Engine) -> anyhow::Result<T> + Send + 'static,
 ) -> Result<T, (StatusCode, String)> {
     let engine = app.engine.clone();
     tokio::task::spawn_blocking(move || f(&engine))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")))
+        .map_err(|e| (status, format!("{e:#}")))
 }
 
 async fn devices(State(app): State<App>) -> ApiResult {
-    let (inputs, outputs) = blocking(&app, |e| {
+    let (inputs, outputs) = blocking(&app, StatusCode::INTERNAL_SERVER_ERROR, |e| {
         Ok((e.backend().input_devices()?, e.backend().output_devices()?))
     })
     .await?;
@@ -145,7 +147,10 @@ async fn devices(State(app): State<App>) -> ApiResult {
 }
 
 async fn apps(State(app): State<App>) -> ApiResult {
-    let apps = blocking(&app, |e| e.backend().audio_apps()).await?;
+    let apps = blocking(&app, StatusCode::INTERNAL_SERVER_ERROR, |e| {
+        e.backend().audio_apps()
+    })
+    .await?;
     Ok(Json(apps).into_response())
 }
 
@@ -157,7 +162,11 @@ struct NewSource {
 }
 
 async fn add_source(State(app): State<App>, Json(body): Json<NewSource>) -> ApiResult {
-    let id = blocking(&app, move |e| e.add_source(body.name, body.kind)).await?;
+    // add_source only fails on invalid input.
+    let id = blocking(&app, StatusCode::BAD_REQUEST, move |e| {
+        e.add_source(body.name, body.kind)
+    })
+    .await?;
     Ok(Json(json!({ "id": id })).into_response())
 }
 
