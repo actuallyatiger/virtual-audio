@@ -386,6 +386,22 @@ impl Engine {
         }
         inner.config.output = output;
         self.restart_output(&mut inner);
+        // Re-run the feedback check for device sources against the new output.
+        let devices: Vec<String> = inner
+            .config
+            .sources
+            .iter()
+            .filter(|s| matches!(s.kind, SourceKind::Device { .. }))
+            .map(|s| s.id.clone())
+            .collect();
+        for id in devices {
+            if let Some(rt) = inner.sources.get_mut(&id) {
+                if let Some(w) = rt.capture.take() {
+                    w.stop();
+                }
+                rt.retry_at = Instant::now();
+            }
+        }
         self.bump(&mut inner);
     }
 
@@ -433,6 +449,7 @@ impl Engine {
         let now = Instant::now();
         let mut changed = false;
         let sources = inner.config.sources.clone();
+        let output_name = inner.config.output.as_ref().map(|o| o.name.clone());
         for src in &sources {
             let rt = inner.sources.get_mut(&src.id).unwrap();
 
@@ -472,6 +489,28 @@ impl Engine {
 
             let target = match &src.kind {
                 SourceKind::Device { device } => {
+                    let name = match device {
+                        Some(d) => Some(d.name.clone()),
+                        None => self.backend.input_devices().ok().and_then(|devices| {
+                            devices.into_iter().find(|d| d.is_default).map(|d| d.name)
+                        }),
+                    };
+                    if let (Some(name), Some(out)) = (&name, &output_name)
+                        && feeds_back(name, out)
+                    {
+                        let msg = format!(
+                            "“{name}” is the other end of the output “{out}”, so capturing \
+                                 it would loop the mix into itself. Choose your real microphone."
+                        );
+                        if rt.status.lock().unwrap().message != msg {
+                            tracing::warn!("source {:?}: refusing feedback loop: {msg}", src.name);
+                            set_status(&rt.status, "error", msg);
+                            self.mixer.lock().unwrap().remove_input(&src.id);
+                            changed = true;
+                        }
+                        rt.retry_at = now + RETRY_DELAY;
+                        continue;
+                    }
                     CaptureTarget::Device(device.as_ref().map(|d| d.id.clone()))
                 }
                 SourceKind::App { exe } => match self.backend.find_process(exe) {
@@ -533,6 +572,14 @@ impl SourceRuntime {
             retry_at: Instant::now(),
         }
     }
+}
+
+/// Whether capturing `capture` would record the mix we play into `output`,
+/// i.e. it is the recording end of the same virtual cable. Virtual cables
+/// name their ends "X Input (…)" / "X Output (…)" (VB-CABLE, Voicemeeter).
+fn feeds_back(capture: &str, output: &str) -> bool {
+    let capture = capture.to_lowercase();
+    capture.contains("output") && capture.replacen("output", "input", 1) == output.to_lowercase()
 }
 
 fn display_exe(exe: &str) -> String {
@@ -632,6 +679,26 @@ fn render_thread(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detects_virtual_cable_loopback() {
+        assert!(feeds_back(
+            "CABLE Output (VB-Audio Virtual Cable)",
+            "CABLE Input (VB-Audio Virtual Cable)"
+        ));
+        assert!(feeds_back(
+            "VoiceMeeter Output (VB-Audio VoiceMeeter VAIO)",
+            "VoiceMeeter Input (VB-Audio VoiceMeeter VAIO)"
+        ));
+        assert!(!feeds_back(
+            "Microphone (Blue Snowball)",
+            "CABLE Input (VB-Audio Virtual Cable)"
+        ));
+        assert!(!feeds_back(
+            "CABLE-A Output (VB-Audio Cable A)",
+            "CABLE Input (VB-Audio Virtual Cable)"
+        ));
+    }
 
     #[test]
     fn exe_display_names() {
