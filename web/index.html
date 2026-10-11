@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Virtual Audio Mixer</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="/favicon.svg" alt="" width="28" height="28">
+      <h1>Virtual Audio Mixer</h1>
+      <span id="conn" class="conn" title="Connection to mixer">connecting…</span>
+    </div>
+    <div class="topbar-actions">
+      <label class="switch" id="autostart-wrap" title="Launch in the background when you sign in">
+        <input type="checkbox" id="autostart">
+        <span>Start with Windows</span>
+      </label>
+      <button id="quit" class="ghost danger" title="Stop the mixer and close the tray app">Quit</button>
+    </div>
+  </header>
+
+  <div id="demo-banner" class="banner" hidden>
+    Demo mode: not running on Windows, so devices and apps are simulated tone generators.
+  </div>
+
+  <main>
+    <section class="panel output-panel" aria-labelledby="out-h">
+      <div class="panel-head">
+        <h2 id="out-h">Output</h2>
+        <span id="out-status" class="status"></span>
+      </div>
+      <div class="output-row">
+        <label for="output">Send the mix to</label>
+        <select id="output"></select>
+        <button id="refresh-outputs" class="ghost icon" title="Refresh device list" aria-label="Refresh device list">⟳</button>
+      </div>
+      <p class="hint" id="output-hint"></p>
+    </section>
+
+    <section class="panel" aria-labelledby="mix-h">
+      <div class="panel-head">
+        <h2 id="mix-h">Mixer</h2>
+        <button id="add-source" class="primary">+ Add source</button>
+      </div>
+      <div id="strips" class="strips"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="hk-h">
+      <div class="panel-head">
+        <h2 id="hk-h">Hotkeys</h2>
+        <button id="add-hotkey" class="ghost">+ Add hotkey</button>
+      </div>
+      <p class="hint">Hotkeys work globally, even while a game or Discord is focused, and don't block the key in other apps.</p>
+      <div id="hotkeys" class="hotkeys"></div>
+    </section>
+  </main>
+
+  <template id="strip-tpl">
+    <article class="strip">
+      <div class="strip-head">
+        <span class="kind-icon" aria-hidden="true"></span>
+        <input class="name" aria-label="Source name" spellcheck="false">
+        <button class="ghost icon remove" title="Remove source" aria-label="Remove source">✕</button>
+      </div>
+      <div class="detail"></div>
+      <div class="status"></div>
+      <div class="meter" aria-hidden="true"><div class="meter-fill"></div><div class="meter-mask"></div></div>
+      <div class="gain-row">
+        <input type="range" class="gain" min="-60" max="12" step="0.5" aria-label="Volume">
+        <output class="gain-value"></output>
+      </div>
+      <div class="strip-actions">
+        <button class="mute">Mute</button>
+        <span class="gate" title="Silenced by a push-to-talk / push-to-mute hotkey">PTT</span>
+      </div>
+    </article>
+  </template>
+
+  <dialog id="add-dialog">
+    <form method="dialog" class="dialog-body">
+      <h2>Add source</h2>
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" data-tab="app" aria-selected="true">App</button>
+        <button type="button" role="tab" data-tab="device" aria-selected="false">Microphone / input</button>
+      </div>
+      <div class="tab-panel" data-panel="app">
+        <p class="hint">Captures everything an app plays (including its child processes), e.g. Chrome or a soundboard. The app keeps playing to your speakers too.</p>
+        <div class="list-head"><span>Apps playing audio</span><button type="button" id="refresh-apps" class="ghost icon" title="Refresh" aria-label="Refresh apps">⟳</button></div>
+        <ul id="app-list" class="pick-list"></ul>
+        <label class="field">Or type an executable name
+          <input id="exe-input" placeholder="e.g. Soundpad.exe" spellcheck="false">
+        </label>
+      </div>
+      <div class="tab-panel" data-panel="device" hidden>
+        <ul id="device-list" class="pick-list"></ul>
+      </div>
+      <p id="add-error" class="error" hidden></p>
+      <div class="dialog-actions">
+        <button value="cancel" class="ghost">Cancel</button>
+        <button id="add-confirm" value="default" class="primary" disabled>Add</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+  <script src="/app.js"></script>
+</body>
+</html>
