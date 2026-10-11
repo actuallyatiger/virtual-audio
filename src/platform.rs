@@ -76,7 +76,12 @@ mod imp {
     }
 
     pub fn shell_open(target: &str) {
-        let _ = std::process::Command::new("xdg-open").arg(target).spawn();
+        let opener = if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        };
+        let _ = std::process::Command::new(opener).arg(target).spawn();
     }
 }
 
