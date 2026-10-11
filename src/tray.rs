@@ -20,9 +20,10 @@ pub fn quit_handle() -> impl Fn() + Send + Sync + 'static {
 /// thread that called [`quit_handle`].
 pub fn run(url: String, quit: impl Fn() + Send + Sync + 'static) -> anyhow::Result<()> {
     let open = MenuItem::new("Open mixer", true, None);
+    let log = MenuItem::new("Open log file", true, None);
     let exit = MenuItem::new("Quit", true, None);
     let menu = Menu::new();
-    menu.append_items(&[&open, &PredefinedMenuItem::separator(), &exit])?;
+    menu.append_items(&[&open, &log, &PredefinedMenuItem::separator(), &exit])?;
     let _tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_menu_on_left_click(false)
@@ -30,11 +31,13 @@ pub fn run(url: String, quit: impl Fn() + Send + Sync + 'static) -> anyhow::Resu
         .with_icon(icon()?)
         .build()?;
 
-    let (open_id, exit_id) = (open.id().clone(), exit.id().clone());
+    let (open_id, log_id, exit_id) = (open.id().clone(), log.id().clone(), exit.id().clone());
     let menu_url = url.clone();
     MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
         if event.id == open_id {
-            crate::platform::open_browser(&menu_url);
+            crate::platform::shell_open(&menu_url);
+        } else if event.id == log_id {
+            crate::platform::shell_open(&crate::log_path().display().to_string());
         } else if event.id == exit_id {
             quit();
         }
@@ -46,10 +49,11 @@ pub fn run(url: String, quit: impl Fn() + Send + Sync + 'static) -> anyhow::Resu
             ..
         } = event
         {
-            crate::platform::open_browser(&url);
+            crate::platform::shell_open(&url);
         }
     }));
 
+    tracing::info!("tray icon ready");
     let mut msg = MSG::default();
     unsafe {
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
