@@ -9,9 +9,7 @@ use std::collections::HashMap;
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, STILL_ACTIVE, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::Media::Audio::*;
-use windows::Win32::System::Com::StructuredStorage::{
-    PROPVARIANT, PropVariantClear, PropVariantToStringAlloc,
-};
+use windows::Win32::System::Com::StructuredStorage::{PROPVARIANT, PropVariantToStringAlloc};
 use windows::Win32::System::Com::*;
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
@@ -141,12 +139,11 @@ fn device_id(device: &IMMDevice) -> anyhow::Result<String> {
 fn device_name(device: &IMMDevice) -> anyhow::Result<String> {
     unsafe {
         let store = device.OpenPropertyStore(STGM_READ)?;
-        let mut value: PROPVARIANT = store.GetValue(&PKEY_Device_FriendlyName)?;
-        let text = PropVariantToStringAlloc(&value)
+        // Cleared by PROPVARIANT's Drop.
+        let value: PROPVARIANT = store.GetValue(&PKEY_Device_FriendlyName)?;
+        PropVariantToStringAlloc(&value)
             .map_err(anyhow::Error::from)
-            .and_then(take_pwstr);
-        let _ = PropVariantClear(&mut value);
-        text
+            .and_then(take_pwstr)
     }
 }
 
@@ -317,14 +314,15 @@ fn activate_process_loopback(pid: u32) -> anyhow::Result<IAudioClient> {
                 },
             },
         };
-        let mut prop = PROPVARIANT::default();
+        // PROPVARIANT's Drop calls PropVariantClear, which would CoTaskMemFree
+        // the blob. It points at `params` on our stack, so never drop it.
+        let mut prop = std::mem::ManuallyDrop::new(PROPVARIANT::default());
         {
             let inner = &mut *prop.Anonymous.Anonymous;
             inner.vt = VT_BLOB;
             inner.Anonymous.blob.cbSize = size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>() as u32;
             inner.Anonymous.blob.pBlobData = &mut params as *mut _ as *mut u8;
         }
-        // `prop` borrows `params`; it must not be PropVariantClear'ed.
 
         let done = Event::new()?;
         let handler: IActivateAudioInterfaceCompletionHandler = ActivationHandler {
@@ -334,10 +332,12 @@ fn activate_process_loopback(pid: u32) -> anyhow::Result<IAudioClient> {
         let op = ActivateAudioInterfaceAsync(
             VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
             &IAudioClient::IID,
-            Some(&prop),
+            Some(&*prop),
             &handler,
         )?;
         if !done.wait(5_000)? {
+            // The handler may still fire later; keep its event handle valid.
+            std::mem::forget(done);
             bail!("timed out activating process loopback");
         }
         let mut hr = HRESULT(0);
