@@ -40,7 +40,7 @@ fn ensure_com() {
     });
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum SampleFormat {
     F32,
     I16,
@@ -87,8 +87,14 @@ fn initialize(
                 None,
             )
         } {
-            Ok(()) => return Ok((client, fmt)),
-            Err(e) => last_err = Some(e),
+            Ok(()) => {
+                tracing::info!("initialized stream as {fmt:?}");
+                return Ok((client, fmt));
+            }
+            Err(e) => {
+                tracing::warn!("Initialize as {fmt:?} rejected: {e}");
+                last_err = Some(e);
+            }
         }
     }
     Err(anyhow!(
@@ -304,6 +310,7 @@ impl IActivateAudioInterfaceCompletionHandler_Impl for ActivationHandler_Impl {
 
 fn activate_process_loopback(pid: u32) -> anyhow::Result<IAudioClient> {
     ensure_com();
+    tracing::info!("activating process loopback for PID {pid}");
     unsafe {
         let mut params = AUDIOCLIENT_ACTIVATION_PARAMS {
             ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
@@ -340,6 +347,7 @@ fn activate_process_loopback(pid: u32) -> anyhow::Result<IAudioClient> {
             std::mem::forget(done);
             bail!("timed out activating process loopback");
         }
+        tracing::info!("process loopback activation completed");
         let mut hr = HRESULT(0);
         let mut unknown: Option<IUnknown> = None;
         op.GetActivateResult(&mut hr, &mut unknown)?;
@@ -577,6 +585,7 @@ impl Backend for Wasapi {
             CaptureTarget::Device(id) => {
                 let dev = get_device(eCapture, id.as_deref())?;
                 let name = device_name(&dev).unwrap_or_default();
+                tracing::info!("opening capture device {name:?}");
                 let make = || -> anyhow::Result<IAudioClient> {
                     Ok(unsafe { dev.Activate(CLSCTX_ALL, None)? })
                 };
@@ -594,6 +603,10 @@ impl Backend for Wasapi {
     fn open_render(&self, device_id: &str) -> anyhow::Result<Box<dyn RenderStream>> {
         ensure_com();
         let dev = get_device(eRender, Some(device_id))?;
+        tracing::info!(
+            "opening output device {:?}",
+            device_name(&dev).unwrap_or_default()
+        );
         let make =
             || -> anyhow::Result<IAudioClient> { Ok(unsafe { dev.Activate(CLSCTX_ALL, None)? }) };
         let (client, format) = initialize(&make, 0)?;

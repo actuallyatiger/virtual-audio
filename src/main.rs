@@ -16,7 +16,13 @@ use std::sync::Arc;
 
 fn main() -> anyhow::Result<()> {
     let background = std::env::args().any(|a| a == "--background");
-    init_logging();
+    let verbose = std::env::args().any(|a| a == "--verbose");
+    init_logging(verbose);
+    tracing::info!(
+        "Virtual Audio Mixer {} starting, args: {:?}",
+        env!("CARGO_PKG_VERSION"),
+        std::env::args().skip(1).collect::<Vec<_>>()
+    );
 
     let first_run = !config::data_dir().join("config.json").exists();
     let mut config = Config::load();
@@ -30,7 +36,7 @@ fn main() -> anyhow::Result<()> {
         Err(e) => {
             tracing::info!("port {port} busy ({e}), assuming already running");
             if !background {
-                platform::open_browser(&url);
+                platform::shell_open(&url);
             }
             return Ok(());
         }
@@ -61,9 +67,11 @@ fn main() -> anyhow::Result<()> {
         });
         tracing::info!("UI at {url}");
         if !background {
-            platform::open_browser(&url);
+            platform::shell_open(&url);
         }
-        tray::run(url, move || quit())?;
+        if let Err(e) = tray::run(url, move || quit()) {
+            tracing::error!("tray icon failed: {e:#}");
+        }
     }
 
     #[cfg(not(windows))]
@@ -84,6 +92,7 @@ fn main() -> anyhow::Result<()> {
         })?;
     }
 
+    tracing::info!("shutting down");
     engine.shutdown();
     runtime.shutdown_timeout(std::time::Duration::from_millis(500));
     Ok(())
@@ -114,19 +123,42 @@ fn apply_first_run_defaults(config: &mut Config, backend: &dyn backend::Backend)
     let _ = config.save();
 }
 
-fn init_logging() {
-    let filter = tracing_subscriber::filter::LevelFilter::INFO;
-    if cfg!(all(windows, not(debug_assertions))) {
-        let dir = config::data_dir();
-        let _ = std::fs::create_dir_all(&dir);
-        if let Ok(file) = std::fs::File::create(dir.join("log.txt")) {
-            tracing_subscriber::fmt()
-                .with_max_level(filter)
-                .with_ansi(false)
-                .with_writer(std::sync::Mutex::new(file))
-                .init();
-            return;
-        }
+pub fn log_path() -> std::path::PathBuf {
+    config::data_dir().join("log.txt")
+}
+
+/// Release builds on Windows have no console, so everything (including
+/// panics) goes to `%APPDATA%\VirtualAudioMixer\log.txt`. `--verbose`
+/// adds debug detail.
+fn init_logging(verbose: bool) {
+    use tracing_subscriber::filter::LevelFilter;
+    let filter = if verbose {
+        LevelFilter::DEBUG
+    } else {
+        LevelFilter::INFO
+    };
+    let builder = tracing_subscriber::fmt()
+        .with_max_level(filter)
+        .with_thread_names(true)
+        .with_target(false);
+    let file = cfg!(all(windows, not(debug_assertions)))
+        .then(|| {
+            let _ = std::fs::create_dir_all(config::data_dir());
+            std::fs::File::create(log_path()).ok()
+        })
+        .flatten();
+    match file {
+        Some(file) => builder
+            .with_ansi(false)
+            .with_writer(std::sync::Mutex::new(file))
+            .init(),
+        None => builder.init(),
     }
-    tracing_subscriber::fmt().with_max_level(filter).init();
+
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current();
+        tracing::error!("panic in thread {:?}: {info}", thread.name().unwrap_or("?"));
+        default_hook(info);
+    }));
 }

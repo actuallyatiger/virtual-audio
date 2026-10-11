@@ -1,4 +1,4 @@
-//! Small OS integrations: start-with-Windows and opening the browser.
+//! Small OS integrations: start-with-Windows and opening URLs/files.
 
 #[cfg(windows)]
 mod imp {
@@ -51,12 +51,12 @@ mod imp {
         Ok(())
     }
 
-    pub fn open_browser(url: &str) {
+    pub fn shell_open(target: &str) {
         unsafe {
             ShellExecuteW(
                 None,
                 w!("open"),
-                &HSTRING::from(url),
+                &HSTRING::from(target),
                 PCWSTR::null(),
                 PCWSTR::null(),
                 SW_SHOWNORMAL,
@@ -75,8 +75,8 @@ mod imp {
         anyhow::bail!("start with Windows is only available on Windows")
     }
 
-    pub fn open_browser(url: &str) {
-        let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+    pub fn shell_open(target: &str) {
+        let _ = std::process::Command::new("xdg-open").arg(target).spawn();
     }
 }
 

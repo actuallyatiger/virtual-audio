@@ -452,8 +452,17 @@ impl Engine {
                         );
                         rt.retry_at = now;
                     }
-                    // The capture thread already reported its error.
-                    _ => rt.retry_at = now + RETRY_DELAY,
+                    _ => {
+                        // A thread that ends without reporting an error panicked.
+                        if rt.status.lock().unwrap().state != "error" {
+                            set_status(
+                                &rt.status,
+                                "error",
+                                "Capture stopped unexpectedly, see log.txt",
+                            );
+                        }
+                        rt.retry_at = now + RETRY_DELAY;
+                    }
                 }
                 changed = true;
             }
@@ -467,6 +476,7 @@ impl Engine {
                 }
                 SourceKind::App { exe } => match self.backend.find_process(exe) {
                     Some(pid) => {
+                        tracing::info!("source {:?}: found {exe} as PID {pid}", src.name);
                         rt.pid = Some(pid);
                         CaptureTarget::Process(pid)
                     }
@@ -544,6 +554,7 @@ fn capture_thread(
 ) {
     let notify = || changed.send_modify(|v| *v += 1);
     backend.promote_audio_thread();
+    tracing::info!("opening capture {target:?}");
     let mut stream = match backend.open_capture(&target) {
         Ok(s) => s,
         Err(e) => {
@@ -553,6 +564,7 @@ fn capture_thread(
             return;
         }
     };
+    tracing::info!("capturing {target:?} ({})", stream.describe());
     set_status(status, "running", stream.describe());
     notify();
     while !stop.load(Ordering::Relaxed) {
