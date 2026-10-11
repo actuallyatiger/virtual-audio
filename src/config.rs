@@ -121,6 +121,8 @@ impl Config {
         std::fs::create_dir_all(path.parent().unwrap())?;
         let tmp = path.with_extension("json.tmp");
         std::fs::write(&tmp, serde_json::to_vec_pretty(self)?)?;
+        // Replaces the old file atomically; on Windows this is MoveFileExW
+        // with MOVEFILE_REPLACE_EXISTING.
         std::fs::rename(tmp, path)?;
         Ok(())
     }
