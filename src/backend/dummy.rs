@@ -115,7 +115,7 @@ impl CaptureStream for Tone {
         }
         self.next += Duration::from_millis(10);
         let mut buf = [0f32; 960];
-        for frame in buf.chunks_exact_mut(2) {
+        for frame in buf.as_chunks_mut::<2>().0 {
             self.n += 1;
             let on = !self.bursty || (self.n / (SAMPLE_RATE as u64 / 2)).is_multiple_of(3);
             let v = if on {
