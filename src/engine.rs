@@ -76,6 +76,8 @@ struct SourceRuntime {
     status: SharedStatus,
     capture: Option<Worker>,
     pid: Option<u32>,
+    /// For "default microphone" sources: the device the capture opened.
+    default_id: Option<String>,
     retry_at: Instant,
 }
 
@@ -453,6 +455,24 @@ impl Engine {
         for src in &sources {
             let rt = inner.sources.get_mut(&src.id).unwrap();
 
+            if rt.capture.is_some()
+                && let Some(captured) = &rt.default_id
+            {
+                let current = self.backend.default_input();
+                if current.as_ref().map(|d| &d.id) != Some(captured) {
+                    let name = current.map(|d| d.name).unwrap_or_else(|| "none".into());
+                    tracing::info!(
+                        "source {:?}: Windows default mic changed to {name:?}",
+                        src.name
+                    );
+                    if let Some(w) = rt.capture.take() {
+                        w.stop();
+                    }
+                    rt.default_id = None;
+                    rt.retry_at = now;
+                }
+            }
+
             let exited = rt.pid.is_some_and(|pid| !self.backend.process_alive(pid));
             let failed = rt.capture.as_ref().is_some_and(|w| w.finished());
             if exited || failed {
@@ -489,12 +509,16 @@ impl Engine {
 
             let target = match &src.kind {
                 SourceKind::Device { device } => {
-                    let name = match device {
-                        Some(d) => Some(d.name.clone()),
-                        None => self.backend.input_devices().ok().and_then(|devices| {
-                            devices.into_iter().find(|d| d.is_default).map(|d| d.name)
-                        }),
+                    // Resolve "default" to a concrete device so we open exactly
+                    // what we checked, and can notice when the default moves.
+                    let (id, name) = match device {
+                        Some(d) => (Some(d.id.clone()), Some(d.name.clone())),
+                        None => match self.backend.default_input() {
+                            Some(d) => (Some(d.id), Some(d.name)),
+                            None => (None, None),
+                        },
                     };
+                    rt.default_id = if device.is_none() { id.clone() } else { None };
                     if let (Some(name), Some(out)) = (&name, &output_name)
                         && feeds_back(name, out)
                     {
@@ -511,7 +535,7 @@ impl Engine {
                         rt.retry_at = now + RETRY_DELAY;
                         continue;
                     }
-                    CaptureTarget::Device(device.as_ref().map(|d| d.id.clone()))
+                    CaptureTarget::Device(id)
                 }
                 SourceKind::App { exe } => match self.backend.find_process(exe) {
                     Some(pid) => {
@@ -569,6 +593,7 @@ impl SourceRuntime {
             status: Arc::new(Mutex::new(Status::new("waiting", "Starting…"))),
             capture: None,
             pid: None,
+            default_id: None,
             retry_at: Instant::now(),
         }
     }

@@ -36,6 +36,18 @@ impl Backend for Dummy {
         ])
     }
 
+    /// The first input, or the one whose id is in `<data dir>/dummy-default-input`
+    /// (lets you simulate changing the Windows default).
+    fn default_input(&self) -> Option<DeviceInfo> {
+        let wanted =
+            std::fs::read_to_string(crate::config::data_dir().join("dummy-default-input")).ok();
+        let inputs = self.input_devices().ok()?;
+        let pick = wanted
+            .and_then(|id| inputs.iter().position(|d| d.id == id.trim()))
+            .unwrap_or(0);
+        inputs.into_iter().nth(pick)
+    }
+
     fn output_devices(&self) -> anyhow::Result<Vec<DeviceInfo>> {
         Ok(vec![
             DeviceInfo {

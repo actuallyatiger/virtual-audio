@@ -508,6 +508,17 @@ impl Backend for Wasapi {
         list_devices(eCapture)
     }
 
+    fn default_input(&self) -> Option<DeviceInfo> {
+        let dev = get_device(eCapture, None).ok()?;
+        let id = device_id(&dev).ok()?;
+        let name = device_name(&dev).unwrap_or_else(|_| id.clone());
+        Some(DeviceInfo {
+            id,
+            name,
+            is_default: true,
+        })
+    }
+
     fn output_devices(&self) -> anyhow::Result<Vec<DeviceInfo>> {
         list_devices(eRender)
     }

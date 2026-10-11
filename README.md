@@ -19,8 +19,9 @@ It runs as a small tray app and is controlled from a web page served on
   including its child processes (e.g. all of Chrome's tabs). There are no extra
   virtual devices to set up, and the app still plays to your speakers as normal.
   Apps are matched by executable name, so capture resumes when the app restarts.
-- **Any input device** as a source, or "default microphone" to follow the
-  Windows default.
+- **Any input device** as a source, or "default microphone", which follows the
+  Windows default live. Sources that would capture the recording end of the
+  output cable (a feedback loop) are refused with an error.
 - Volume (−60 to +12 dB), mute and a live level meter for every source and the
   master output. A soft limiter on the master stops the summed mix from
   clipping harshly.
@@ -119,8 +120,6 @@ rejected. This stops other websites from controlling the mixer.
   signing (or test-signing mode) to install.
 - Built-in soundboard (play files from the UI or hotkeys).
 - Monitor the mix on headphones.
-- Follow changes of the Windows default microphone live (currently picked up
-  only when the capture restarts).
 - Adaptive resampling to absorb clock drift between devices. Today a source
   that drifts too far is trimmed, causing a tiny glitch every few minutes at
   worst.
