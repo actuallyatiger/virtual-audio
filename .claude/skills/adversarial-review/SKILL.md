@@ -61,15 +61,46 @@ prompt must be self-contained and include:
    that no longer match the code, Conventional Commit messages, and missing
    tests for changed behaviour.
 
-### Required finding format
+### Required finding formats
+
+There are two kinds of findings, rated differently.
+
+**Defects** (lenses 1 to 5, plus doc errors that would mislead someone into
+breaking things) are rated on two separate axes:
+
+- **Severity**: how bad it is when it happens.
+  - critical: crash, data or config loss, a security hole, or audio sent
+    somewhere the user didn't intend (e.g. into the mic).
+  - high: a core feature is broken, or audibly wrong.
+  - medium: a degraded or confusing feature, with a workaround.
+  - low: cosmetic, or an edge case with negligible impact.
+- **Likelihood**: how likely real users are to hit it.
+  - likely: normal use triggers it.
+  - possible: a plausible but uncommon setup or sequence.
+  - unlikely: needs unusual timing, hardware, or a hostile input.
 
 ```
 ### <short title>
+- Kind: defect
 - Severity: critical | high | medium | low
-- Confidence: high | medium | low
+- Likelihood: likely | possible | unlikely
 - Location: path/to/file.rs:LINE (and others)
 - Failure scenario: concrete inputs/state -> wrong behaviour/crash
 - Evidence: the code (quote the lines) and why it fails
+- Suggested fix: minimal change
+```
+
+**Maintainability** findings (style, readability, modularity, naming, dead
+code, missing tests, docs that are stale but harmless) don't fit severity
+and likelihood. Rate them by category and priority instead:
+
+```
+### <short title>
+- Kind: maintainability
+- Category: style | readability | modularity | dead-code | tests | docs
+- Priority: should-fix (actively misleads or will cause bugs) | nice-to-have
+- Location: path/to/file.rs:LINE
+- Problem: what is wrong and who it misleads
 - Suggested fix: minimal change
 ```
 
@@ -90,17 +121,25 @@ each verifier to **assume each finding is wrong** and to try to refute it:
 - Verdict per finding: **CONFIRMED** (with the reproduction or exact trace),
   **PLAUSIBLE** (real path, but it can't be demonstrated here, e.g. it needs
   Windows hardware) or **REFUTED** (with the reason).
+- For defects, re-assess **severity** and **likelihood** independently of the
+  reviewer's ratings. Reviewers tend to overrate both. For maintainability
+  findings, confirm the category and priority.
 
 ## 4. Triage and fix
 
-- Fix CONFIRMED findings. Fix PLAUSIBLE ones when the fix is small and in
-  proportion to the risk. Note REFUTED ones with their reason, so they aren't
+- Prioritise defects by severity × likelihood. Fix CONFIRMED defects. Fix
+  PLAUSIBLE ones when the fix is small and in proportion to the risk
+  (critical/high severity, or any likely one). Unlikely + low can be noted
+  and left.
+- Fix should-fix maintainability findings. Leave nice-to-have ones unless
+  they ride along with a fix to the same code. Note REFUTED ones with their reason, so they aren't
   re-raised.
 - Keep each fix minimal, add a test when the behaviour is testable, and run
   the fast checks from step 1 before committing. Use one Conventional Commit
   per logical fix.
-- Report back a table: finding, lens, verdict, action (fixed in `<sha>` /
-  declined because …).
+- Report back two tables. **Defects**: finding, lens, severity, likelihood,
+  verdict, action (fixed in `<sha>` / declined because …).
+  **Maintainability**: finding, category, priority, action.
 
 ## Project context (give this to every subagent)
 
