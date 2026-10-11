@@ -13,7 +13,7 @@ use crate::config::{
 use crate::mixer::{ChannelControl, Mixer, push_frames, source_ring};
 use anyhow::{anyhow, bail};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -98,15 +98,23 @@ struct Inner {
     sources: HashMap<String, SourceRuntime>,
     output: Option<Worker>,
     output_status: SharedStatus,
+    /// UI connections that have Listen switched on.
+    listeners: HashSet<u64>,
+    monitor: Option<Worker>,
+    monitor_status: SharedStatus,
     dirty: bool,
     save_error: Option<String>,
 }
+
+/// Where the render thread copies the final mix while someone is listening.
+type MonitorTap = Arc<Mutex<Option<rtrb::Producer<f32>>>>;
 
 pub struct Engine {
     backend: Arc<dyn Backend>,
     inner: Mutex<Inner>,
     master: Arc<ChannelControl>,
     mixer: Arc<Mutex<Mixer>>,
+    tap: MonitorTap,
     changed: tokio::sync::watch::Sender<u64>,
     shutdown: AtomicBool,
     /// Serializes supervise() runs (the supervisor thread and add_source),
@@ -140,6 +148,8 @@ pub struct StateView {
     pub master: Channel,
     pub sources: Vec<SourceView>,
     pub hotkeys: Vec<Hotkey>,
+    /// Listen (monitor the mix on the default output) status.
+    pub monitor: Status,
 }
 
 #[derive(Serialize)]
@@ -167,11 +177,15 @@ impl Engine {
                 sources,
                 output: None,
                 output_status: Arc::new(Mutex::new(Status::default())),
+                listeners: HashSet::new(),
+                monitor: None,
+                monitor_status: Arc::new(Mutex::new(Status::new("idle", ""))),
                 dirty: false,
                 save_error: None,
             }),
             master,
             mixer,
+            tap: Arc::new(Mutex::new(None)),
             changed: tokio::sync::watch::channel(0).0,
             shutdown: AtomicBool::new(false),
             supervising: Mutex::new(()),
@@ -222,6 +236,7 @@ impl Engine {
         if let Some(w) = inner.output.take() {
             w.stop();
         }
+        self.stop_monitor(&mut inner);
         for rt in inner.sources.values_mut() {
             if let Some(w) = rt.capture.take() {
                 w.stop();
@@ -255,6 +270,7 @@ impl Engine {
                 })
                 .collect(),
             hotkeys: inner.config.hotkeys.clone(),
+            monitor: inner.monitor_status.lock().unwrap().clone(),
         }
     }
 
@@ -475,9 +491,70 @@ impl Engine {
         inner.output_status = status.clone();
         let device = inner.config.output.clone();
         let changed = self.changed.clone();
+        let tap = self.tap.clone();
         inner.output = Some(Worker::spawn("render".into(), move |stop| {
-            render_thread(&*backend, device, &mixer, &status, &stop, &changed)
+            render_thread(&*backend, device, &mixer, &tap, &status, &stop, &changed)
         }));
+    }
+
+    /// Turns Listen on/off for one UI connection. The mix plays on the
+    /// Windows default output while any connection has it on, so closing
+    /// the tab (which drops its connection) always stops it.
+    pub fn set_listening(&self, connection: u64, on: bool) {
+        let mut inner = self.inner.lock().unwrap();
+        let was = !inner.listeners.is_empty();
+        if on {
+            inner.listeners.insert(connection);
+        } else {
+            inner.listeners.remove(&connection);
+        }
+        let now = !inner.listeners.is_empty();
+        if was == now {
+            return;
+        }
+        if now {
+            self.start_monitor(&mut inner);
+        } else {
+            self.stop_monitor(&mut inner);
+        }
+        self.changed.send_modify(|v| *v += 1);
+    }
+
+    fn start_monitor(&self, inner: &mut Inner) {
+        let (tx, rx) = source_ring();
+        *self.tap.lock().unwrap() = Some(tx);
+        let status = Arc::new(Mutex::new(Status::new("waiting", "Starting…")));
+        inner.monitor_status = status.clone();
+        let backend = self.backend.clone();
+        let output_id = inner.config.output.as_ref().map(|d| d.id.clone());
+        let changed = self.changed.clone();
+        inner.monitor = Some(Worker::spawn("monitor".into(), move |stop| {
+            monitor_thread(&*backend, rx, output_id, &status, &stop, &changed)
+        }));
+    }
+
+    fn stop_monitor(&self, inner: &mut Inner) {
+        *self.tap.lock().unwrap() = None;
+        if let Some(w) = inner.monitor.take() {
+            w.stop();
+        }
+        inner.monitor_status = Arc::new(Mutex::new(Status::new("idle", "")));
+    }
+
+    /// Reorders sources to match `ids`, which must list every source once.
+    pub fn reorder_sources(&self, ids: &[String]) -> anyhow::Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        let current: HashSet<&String> = inner.config.sources.iter().map(|s| &s.id).collect();
+        let wanted: HashSet<&String> = ids.iter().collect();
+        if ids.len() != current.len() || current != wanted {
+            bail!("order must list every source exactly once");
+        }
+        inner
+            .config
+            .sources
+            .sort_by_key(|s| ids.iter().position(|id| *id == s.id));
+        self.bump(&mut inner);
+        Ok(())
     }
 
     /// Starts captures that should be running and reaps dead ones.
@@ -765,6 +842,7 @@ fn render_thread(
     backend: &dyn Backend,
     device: Option<DeviceRef>,
     mixer: &Mutex<Mixer>,
+    tap: &Mutex<Option<rtrb::Producer<f32>>>,
     status: &SharedStatus,
     stop: &AtomicBool,
     changed: &tokio::sync::watch::Sender<u64>,
@@ -803,12 +881,64 @@ fn render_thread(
         if retry_at.is_some_and(|t| Instant::now() >= t) {
             (stream, retry_at) = open();
         }
-        if let Err(e) = stream.render(&mut |buf| mixer.lock().unwrap().process(buf)) {
+        let result = stream.render(&mut |buf| {
+            mixer.lock().unwrap().process(buf);
+            // Never block the audio thread on the tap; skip a block instead.
+            if let Ok(mut tap) = tap.try_lock()
+                && let Some(tx) = tap.as_mut()
+            {
+                push_frames(tx, buf);
+            }
+        });
+        if let Err(e) = result {
             tracing::warn!("output failed: {e:#}");
             set_status(status, "error", format!("{e:#}"));
             changed.send_modify(|v| *v += 1);
             stream = Box::new(NullRender::default());
             retry_at = Some(Instant::now() + RETRY_DELAY);
+        }
+    }
+}
+
+/// Plays the tapped mix on the Windows default output (Listen).
+fn monitor_thread(
+    backend: &dyn Backend,
+    rx: rtrb::Consumer<f32>,
+    output_id: Option<String>,
+    status: &SharedStatus,
+    stop: &AtomicBool,
+    changed: &tokio::sync::watch::Sender<u64>,
+) {
+    let fail = |msg: String| {
+        tracing::warn!("listen: {msg}");
+        set_status(status, "error", msg);
+        changed.send_modify(|v| *v += 1);
+    };
+    backend.promote_audio_thread();
+    let Some(dev) = backend.default_output() else {
+        return fail("No default output device to listen on".into());
+    };
+    if output_id.as_ref() == Some(&dev.id) {
+        return fail(format!(
+            "Your Windows default output is “{}”, which the mix already goes to. \
+             Set your headphones as the default output to listen.",
+            dev.name
+        ));
+    }
+    let mut stream = match backend.open_render(&dev.id) {
+        Ok(s) => s,
+        Err(e) => return fail(format!("{}: {e:#}", dev.name)),
+    };
+    tracing::info!("listen: playing the mix on {:?}", dev.name);
+    set_status(status, "running", dev.name);
+    changed.send_modify(|v| *v += 1);
+
+    // A one-input mixer gives us priming, drift trimming and gain ramps.
+    let mut mixer = Mixer::new(Arc::new(ChannelControl::new(1.0, false)));
+    mixer.set_input("mix", Arc::new(ChannelControl::new(1.0, false)), rx);
+    while !stop.load(Ordering::Relaxed) {
+        if let Err(e) = stream.render(&mut |buf| mixer.process(buf)) {
+            return fail(format!("{e:#}"));
         }
     }
 }

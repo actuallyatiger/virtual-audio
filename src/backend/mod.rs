@@ -49,6 +49,8 @@ pub trait Backend: Send + Sync + 'static {
     fn output_devices(&self) -> anyhow::Result<Vec<DeviceInfo>>;
     /// The current Windows default capture device. Cheap enough to poll.
     fn default_input(&self) -> Option<DeviceInfo>;
+    /// The current Windows default playback device.
+    fn default_output(&self) -> Option<DeviceInfo>;
     /// Processes that currently own an audio session, collapsed to the
     /// top-most process of each executable.
     fn audio_apps(&self) -> anyhow::Result<Vec<AppInfo>>;

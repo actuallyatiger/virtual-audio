@@ -177,6 +177,17 @@ fn list_devices(flow: EDataFlow) -> anyhow::Result<Vec<DeviceInfo>> {
     }
 }
 
+fn default_device(flow: EDataFlow) -> Option<DeviceInfo> {
+    let dev = get_device(flow, None).ok()?;
+    let id = device_id(&dev).ok()?;
+    let name = device_name(&dev).unwrap_or_else(|_| id.clone());
+    Some(DeviceInfo {
+        id,
+        name,
+        is_default: true,
+    })
+}
+
 fn get_device(flow: EDataFlow, id: Option<&str>) -> anyhow::Result<IMMDevice> {
     let e = enumerator()?;
     let dev = unsafe {
@@ -531,14 +542,11 @@ impl Backend for Wasapi {
     }
 
     fn default_input(&self) -> Option<DeviceInfo> {
-        let dev = get_device(eCapture, None).ok()?;
-        let id = device_id(&dev).ok()?;
-        let name = device_name(&dev).unwrap_or_else(|_| id.clone());
-        Some(DeviceInfo {
-            id,
-            name,
-            is_default: true,
-        })
+        default_device(eCapture)
+    }
+
+    fn default_output(&self) -> Option<DeviceInfo> {
+        default_device(eRender)
     }
 
     fn output_devices(&self) -> anyhow::Result<Vec<DeviceInfo>> {

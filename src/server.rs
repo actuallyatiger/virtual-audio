@@ -69,6 +69,7 @@ pub fn router(engine: Arc<Engine>, port: u16, quit: Arc<dyn Fn() + Send + Sync>)
         .route("/api/devices", get(devices))
         .route("/api/apps", get(apps))
         .route("/api/sources", post(add_source))
+        .route("/api/sources/order", put(reorder_sources))
         .route(
             "/api/channels/{id}",
             patch(update_channel).delete(remove_source),
@@ -199,6 +200,16 @@ async fn remove_source(State(app): State<App>, Path(id): Path<String>) -> ApiRes
 }
 
 #[derive(Deserialize)]
+struct Order {
+    ids: Vec<String>,
+}
+
+async fn reorder_sources(State(app): State<App>, Json(body): Json<Order>) -> ApiResult {
+    app.engine.reorder_sources(&body.ids).map_err(bad)?;
+    ok()
+}
+
+#[derive(Deserialize)]
 struct OutputBody {
     device: Option<DeviceRef>,
 }
@@ -235,11 +246,26 @@ async fn quit_app(State(app): State<App>) -> ApiResult {
 }
 
 async fn ws(State(app): State<App>, upgrade: WebSocketUpgrade) -> Response {
-    upgrade.on_upgrade(move |socket| stream_updates(socket, app.engine))
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT_CONNECTION: AtomicU64 = AtomicU64::new(1);
+    let connection = NEXT_CONNECTION.fetch_add(1, Ordering::Relaxed);
+    upgrade.on_upgrade(move |socket| async move {
+        stream_updates(socket, app.engine.clone(), connection).await;
+        // However the connection ended (tab closed, refreshed, crashed),
+        // stop anything it switched on.
+        app.engine.set_listening(connection, false);
+    })
+}
+
+/// Messages the page sends over the WebSocket.
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ClientMessage {
+    Listen { on: bool },
 }
 
 /// Pushes meters at ~30 fps and the full state whenever it changes.
-async fn stream_updates(mut socket: WebSocket, engine: Arc<Engine>) {
+async fn stream_updates(mut socket: WebSocket, engine: Arc<Engine>, connection: u64) {
     let mut changes = engine.subscribe();
     let mut tick = tokio::time::interval(Duration::from_millis(33));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -261,6 +287,13 @@ async fn stream_updates(mut socket: WebSocket, engine: Arc<Engine>) {
                 json!({ "type": "state", "state": full_state(&engine) })
             }
             incoming = socket.recv() => match incoming {
+                Some(Ok(Message::Text(text))) => {
+                    match serde_json::from_str::<ClientMessage>(&text) {
+                        Ok(ClientMessage::Listen { on }) => engine.set_listening(connection, on),
+                        Err(e) => tracing::debug!("ignoring websocket message {text:?}: {e}"),
+                    }
+                    continue;
+                }
                 Some(Ok(_)) => continue,
                 _ => return,
             },

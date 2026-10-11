@@ -62,6 +62,7 @@
   <template id="strip-tpl">
     <article class="strip">
       <div class="strip-head">
+        <button class="ghost icon handle" title="Drag to reorder, or focus and use the arrow keys" aria-label="Reorder source">⠿</button>
         <span class="kind-icon" aria-hidden="true"></span>
         <input class="name" aria-label="Source name" spellcheck="false">
         <button class="ghost icon remove" title="Remove source" aria-label="Remove source">✕</button>
@@ -71,12 +72,15 @@
       <div class="meter" aria-hidden="true"><div class="meter-fill"></div><div class="meter-mask"></div></div>
       <div class="gain-row">
         <input type="range" class="gain" min="-60" max="12" step="0.5" aria-label="Volume">
-        <output class="gain-value"></output>
+        <button class="gain-value" title="Click to type a value"></button>
       </div>
       <div class="strip-actions">
         <button class="mute">Mute</button>
+        <button class="listen" aria-pressed="false" hidden
+          title="Hear the final mix on your Windows default output (use headphones). Turns off when you close this page.">🎧 Listen</button>
         <span class="gate" title="Silenced by a push-to-talk / push-to-mute hotkey">PTT</span>
       </div>
+      <div class="status monitor-status" hidden></div>
     </article>
   </template>
 

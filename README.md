@@ -22,8 +22,11 @@ It runs as a small tray app and is controlled from a web page served on
 - **Any input device** as a source, or "default microphone", which follows the
   Windows default live. Sources that would capture the recording end of the
   output cable (a feedback loop) are refused with an error.
-- Volume (−60 to +12 dB), mute and a live level meter for every source and the
-  master output. A soft limiter on the master stops the summed mix from
+- Volume (−60 to +12 dB, drag the slider or click the value to type one),
+  mute and a live level meter for every source and the master output. Drag
+  cards by their handle (or focus it and use the arrow keys) to reorder them.
+- **Listen**: hear the final mix on your Windows default output (headphones)
+  to check what others hear. It switches off by itself when you close the page. A soft limiter on the master stops the summed mix from
   clipping harshly.
 - **Global hotkeys**: toggle mute, push-to-talk or push-to-mute on any channel.
   Keyboard combos and mouse side buttons (Mouse4/Mouse5) both work. Hotkeys
@@ -129,13 +132,14 @@ executable with `include_str!`, so the release is a single `.exe`.
 | GET | `/api/devices` | |
 | GET | `/api/apps` | |
 | POST | `/api/sources` | `{"kind":"app","exe":"chrome.exe"}` or `{"kind":"device","device":null}`, plus an optional `"name"` |
+| PUT | `/api/sources/order` | `{"ids":["…","…"]}` (every source id, in the new order) |
 | PATCH | `/api/channels/{id or "master"}` | `{"gain_db":-6,"muted":true,"name":"…"}` (`name` applies to sources only) |
 | DELETE | `/api/channels/{id}` | |
 | PUT | `/api/output` | `{"device":{"id":"…","name":"…"}}` or `{"device":null}` |
 | PUT | `/api/hotkeys` | `[{"keys":"Ctrl+Shift+M","action":"push_to_talk","target":"…"}]` |
 | PUT | `/api/settings` | `{"autostart":true}` |
 | POST | `/api/quit` | Stops the app. |
-| GET | `/ws` | WebSocket: pushes `state` on change and `meters` about 30 times a second |
+| GET | `/ws` | WebSocket: pushes `state` on change and `meters` about 30 times a second. Send `{"type":"listen","on":true}` to monitor the mix; it stops when the socket closes. |
 
 Requests whose `Host` or `Origin` isn't `127.0.0.1`/`localhost` on our port are
 rejected, and the UI can't be embedded in another site's frame. This stops
