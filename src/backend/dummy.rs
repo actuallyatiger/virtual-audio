@@ -48,6 +48,13 @@ impl Backend for Dummy {
         inputs.into_iter().nth(pick)
     }
 
+    fn default_output(&self) -> Option<DeviceInfo> {
+        self.output_devices()
+            .ok()?
+            .into_iter()
+            .find(|d| d.is_default)
+    }
+
     fn output_devices(&self) -> anyhow::Result<Vec<DeviceInfo>> {
         Ok(vec![
             DeviceInfo {
