@@ -23,11 +23,15 @@ It runs as a small tray app and is controlled from a web page served on
   Windows default live. Sources that would capture the recording end of the
   output cable (a feedback loop) are refused with an error.
 - Volume (−60 to +12 dB, drag the slider or click the value to type one),
-  mute and a live level meter for every source and the master output. Drag
+  mute and a live level meter for every source and the master output. A soft
+  limiter on the master stops the summed mix from clipping harshly. Drag
   cards by their handle (or focus it and use the arrow keys) to reorder them.
-- **Listen**: hear the final mix on your Windows default output (headphones)
-  to check what others hear. It switches off by itself when you close the page. A soft limiter on the master stops the summed mix from
-  clipping harshly.
+- **Listen**: hear the final mix on your Windows default output (use
+  headphones) to check what others hear. It's shared by every open mixer
+  page and switches off when the last page that turned it on is closed. It
+  follows changes of the default output, and is refused (with a message) if
+  the default output is the device the mix already goes to. Expect about
+  100 ms of delay on your own voice.
 - **Global hotkeys**: toggle mute, push-to-talk or push-to-mute on any channel.
   Keyboard combos and mouse side buttons (Mouse4/Mouse5) both work. Hotkeys
   don't swallow the key, so it still reaches the game you're in.
@@ -78,6 +82,11 @@ The app understands two command-line flags:
   this.
 - `--verbose`: log extra debug detail.
 
+**Listen says "Your Windows default output is …, which the mix already goes
+to"**: Listen plays on the Windows default output, so that must be your
+headphones, not the virtual cable. Change it in Settings → System → Sound →
+Output; Listen picks up the change by itself.
+
 Logs go to these files only in Windows release builds. Debug builds and demo
 mode print them to the terminal instead.
 
@@ -107,7 +116,7 @@ cargo build --target x86_64-pc-windows-gnu
 | Piece | Where |
 | --- | --- |
 | Mixing core: per-source SPSC ring buffers, gain ramps, meters, soft limiter | `src/mixer.rs` |
-| Engine: config, capture/render threads, supervisor that restarts captures as apps/devices come and go | `src/engine.rs` |
+| Engine: config, capture/render/monitor threads, supervisor that restarts captures, output and Listen as apps/devices come and go | `src/engine.rs` |
 | WASAPI backend: shared-mode event-driven streams, process loopback, device and session enumeration | `src/backend/wasapi.rs` |
 | Demo backend for non-Windows hosts | `src/backend/dummy.rs` |
 | Global hotkeys (polled, non-blocking) | `src/hotkeys.rs` |
@@ -139,7 +148,7 @@ executable with `include_str!`, so the release is a single `.exe`.
 | PUT | `/api/hotkeys` | `[{"keys":"Ctrl+Shift+M","action":"push_to_talk","target":"…"}]` |
 | PUT | `/api/settings` | `{"autostart":true}` |
 | POST | `/api/quit` | Stops the app. |
-| GET | `/ws` | WebSocket: pushes `state` on change and `meters` about 30 times a second. Send `{"type":"listen","on":true}` to monitor the mix; it stops when the socket closes. |
+| GET | `/ws` | WebSocket: pushes `state` on change (including `monitor`, Listen's `{state, message}`) and `meters` about 30 times a second. Send `{"type":"listen","on":true}` to monitor the mix; it plays while any connection has it on, and a connection's request ends when it closes. |
 
 Requests whose `Host` or `Origin` isn't `127.0.0.1`/`localhost` on our port are
 rejected, and the UI can't be embedded in another site's frame. This stops
@@ -154,7 +163,6 @@ each.
   setting, so this slots in without engine changes. It needs Microsoft driver
   signing (or test-signing mode) to install.
 - Built-in soundboard (play files from the UI or hotkeys).
-- Monitor the mix on headphones.
 
 ## License
 
