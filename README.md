@@ -67,7 +67,12 @@ It runs as a small tray app and is controlled from a web page served on
 - Start with Windows (runs in the background, tray icon only), optionally
   **as administrator** so hotkeys also work in games that run as
   administrator. That uses a Task Scheduler task with highest privileges,
-  so Windows asks for permission once rather than at every sign-in.
+  so Windows asks for permission once rather than at every sign-in. The
+  task starts a copy of the mixer in `C:\Program Files\Virtual Audio Mixer`,
+  where only administrators can change it: starting the downloaded file
+  as administrator would let any program that can replace it run as
+  administrator too. After updating the mixer, turn the option off and on
+  again to update that copy. It needs your account to be an administrator.
 - Settings are saved to `%APPDATA%\VirtualAudioMixer\config.json`.
 
 ## Requirements

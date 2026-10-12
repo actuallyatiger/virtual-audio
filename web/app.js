@@ -1437,26 +1437,35 @@ $("#add-hotkey").addEventListener("click", () => {
 // ---------------------------------------------------------------- settings
 
 let adminPending = false; // waiting for the UAC prompt to be answered
+let autostartSaving = false;
 
 /** Saves Start with Windows settings. Changing "as administrator" (or
  * turning autostart off while it's on) makes Windows ask for permission,
  * and the request waits until that's answered. */
 async function saveAutostart(body, input) {
+  // One change at a time: an administrator change waits for the Windows
+  // prompt. The checkboxes stay enabled (disabling them would drop focus).
+  if (autostartSaving) {
+    input.checked = !input.checked;
+    return;
+  }
+  autostartSaving = true;
   const admin = body.autostart_admin !== undefined || (body.autostart === false && state.autostart_admin);
   if (admin) {
     adminPending = true;
-    $("#autostart-admin").disabled = $("#autostart").disabled = true;
     $("#autostart-admin-label").textContent = "as administrator (answer the Windows prompt…)";
   }
+  $(".topbar-actions").setAttribute("aria-busy", "true");
   try {
     await api("PUT", "/api/settings", body);
   } catch (err) {
     input.checked = !input.checked;
     toast(err.message);
   } finally {
+    autostartSaving = false;
+    $(".topbar-actions").removeAttribute("aria-busy");
     if (admin) {
       adminPending = false;
-      $("#autostart-admin").disabled = $("#autostart").disabled = false;
       $("#autostart-admin-label").textContent = "as administrator";
     }
   }
