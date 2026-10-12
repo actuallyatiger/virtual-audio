@@ -48,7 +48,7 @@
       <div class="output-row">
         <label for="output">Send the mix to</label>
         <select id="output"></select>
-        <button id="refresh-outputs" class="ghost icon" title="Refresh device list" aria-label="Refresh device list">⟳</button>
+        <button id="refresh-outputs" class="ghost icon refresh" title="Refresh device list" aria-label="Refresh device list"></button>
       </div>
     </section>
 
@@ -152,7 +152,7 @@
       </div>
       <div class="tab-panel" data-panel="app">
         <p class="hint">Captures everything an app plays (including its child processes), e.g. Chrome or a soundboard. The app keeps playing to your speakers too.</p>
-        <div class="list-head"><span>Apps playing audio</span><button type="button" id="refresh-apps" class="ghost icon" title="Refresh" aria-label="Refresh apps">⟳</button></div>
+        <div class="list-head"><span>Apps playing audio</span><button type="button" id="refresh-apps" class="ghost icon refresh" title="Refresh" aria-label="Refresh apps"></button></div>
         <ul id="app-list" class="pick-list"></ul>
         <label class="field">Or type an executable name
           <input id="exe-input" placeholder="e.g. Soundpad.exe" spellcheck="false">
