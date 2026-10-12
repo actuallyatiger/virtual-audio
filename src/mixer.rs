@@ -106,6 +106,11 @@ pub fn source_ring() -> (rtrb::Producer<f32>, rtrb::Consumer<f32>) {
     rtrb::RingBuffer::new(RING_SAMPLES)
 }
 
+/// Where an audio thread copies what it produces while something (Listen,
+/// Hear sounds) is playing it on the default output. Audio threads only
+/// `try_lock` it, skipping a block rather than waiting.
+pub type MonitorTap = std::sync::Arc<std::sync::Mutex<Option<rtrb::Producer<f32>>>>;
+
 /// Pushes as many whole frames as fit; drops the rest (consumer stalled).
 pub fn push_frames(tx: &mut rtrb::Producer<f32>, data: &[f32]) {
     let n = data.len().min(tx.slots());

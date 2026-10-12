@@ -35,8 +35,11 @@ It runs as a small tray app and is controlled from a web page served on
   20 MB each, 64 sounds) with **+ Add sounds** or by dropping them on the
   soundboard. Click a sound to play it into the mix; clicking it again
   restarts it. Each sound has its own volume, and the soundboard is a mixer
-  channel with its own volume, mute and hotkeys. Turn on **Listen** to hear
-  it yourself.
+  channel with its own volume, mute and hotkeys.
+- **Hear sounds** (on by default): the soundboard also plays on your Windows
+  default output, at its own volume, so you hear your own sounds without
+  hearing your own voice. It pauses while Listen is on, since Listen
+  already includes the soundboard.
 - Volume (−60 to +12 dB, drag the slider or click the value to type one),
   mute and a live level meter for every source and the master output. A soft
   limiter on the master stops the summed mix from clipping harshly. Drag
@@ -73,9 +76,17 @@ It runs as a small tray app and is controlled from a web page served on
    selected automatically on first run if the cable is installed.
 4. Your default microphone is added automatically. Click **+ Add source** to
    add apps (e.g. `chrome.exe`) or other input devices.
-5. In Discord: **Settings → Voice & Video → Input Device → CABLE Output
-   (VB-Audio Virtual Cable)**. Turn off Discord's own noise suppression or
-   "Krisp" if it cuts out your soundboard.
+5. In Discord, open **Settings → Voice & Video**:
+   - **Input Device**: **CABLE Output (VB-Audio Virtual Cable)**.
+   - **Input Sensitivity**: turn off *Automatically determine input
+     sensitivity* and drag the slider all the way left. Discord's automatic
+     gate listens for speech, so it cuts out sounds and music when you
+     aren't talking. Use the mixer's noise gate on your mic instead: it
+     only gates the mic, never the soundboard or apps.
+   - **Noise Suppression**: *None* (Krisp also treats sounds and music as
+     noise). Use the mixer's noise suppression on your mic instead.
+   - **Echo Cancellation** and **Automatic Gain Control**: off. They can
+     duck or pump the soundboard and music.
 
 > Tip: if you capture an app, don't also route the cable back to your
 > speakers, or you'll hear that app twice.
@@ -170,6 +181,7 @@ executable with `include_str!`, so the release is a single `.exe`.
 | DELETE | `/api/sounds/{id}` | |
 | POST | `/api/sounds/{id}/play` | Plays (or restarts) a sound. |
 | POST | `/api/sounds/stop` | Stops all sounds. |
+| PATCH | `/api/soundboard` | `{"hear_sounds":true,"hear_sounds_db":-6}` |
 | PUT | `/api/hotkeys` | `[{"keys":"Ctrl+Shift+M","action":"push_to_talk","target":"…"}]`. Actions: `toggle_mute`, `push_to_talk`, `push_to_mute` (target: `master` or a source id), `play_sound` (target: a sound id), `stop_sounds`. |
 | PUT | `/api/settings` | `{"autostart":true}` |
 | POST | `/api/quit` | Stops the app. |

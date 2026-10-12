@@ -16,6 +16,10 @@ pub struct Config {
     pub hotkeys: Vec<Hotkey>,
     /// Soundboard sounds, in display order.
     pub sounds: Vec<SoundConfig>,
+    /// Play the soundboard on the Windows default output (your headphones)
+    /// too, so you hear your own sounds.
+    pub hear_sounds: bool,
+    pub hear_sounds_db: f32,
 }
 
 impl Default for Config {
@@ -27,6 +31,8 @@ impl Default for Config {
             sources: Vec::new(),
             hotkeys: Vec::new(),
             sounds: Vec::new(),
+            hear_sounds: true,
+            hear_sounds_db: 0.0,
         }
     }
 }

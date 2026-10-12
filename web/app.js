@@ -112,6 +112,7 @@ function render(next) {
   renderStrips();
   renderListen();
   renderSounds();
+  renderHear();
   renderHotkeys();
 }
 
@@ -658,7 +659,7 @@ function renderSounds() {
   if (uploading) hint = `Adding sounds… ${uploading.done} of ${uploading.total} done`;
   else if (!state.sounds.length) hint = "Add MP3, WAV, OGG, FLAC or M4A files up to 60 seconds long, or drop them here. Then click a sound to play it into the mix.";
   else if (!inMix) hint = "The soundboard isn't in the mix, so nobody hears it. ";
-  else hint = "Click a sound to play it into the mix (again to restart it). Turn on 🎧 Listen on Master to hear it yourself.";
+  else hint = `Click a sound to play it into the mix (again to restart it).${state.hear_sounds ? "" : " Turn on 🎧 Hear sounds to hear them yourself."}`;
   // Only touch the hint when it changes, so a focused "Add it back" survives
   // unrelated state updates.
   if (hint !== lastHint) {
@@ -692,6 +693,40 @@ function renderSounds() {
     }
   }
 }
+
+/** Hear sounds: the soundboard on your own headphones, with its own volume. */
+function renderHear() {
+  const on = state.hear_sounds;
+  $("#hear-sounds").setAttribute("aria-pressed", String(on));
+  $("#hear-row").hidden = !on;
+  if (document.activeElement !== $("#hear-gain")) showHearGain(state.hear_sounds_db);
+  const status = $("#hear-status");
+  const h = state.hear_status;
+  if (state.monitor.state !== "idle") {
+    status.className = "status";
+    status.textContent = "Paused while Listen is on (it includes the soundboard)";
+  } else if (!state.sources.some((s) => s.kind === "soundboard")) {
+    status.className = "status";
+    status.textContent = "";
+  } else {
+    status.className = `status ${h.state}`;
+    status.textContent = h.state === "running" ? `Playing on ${h.message}` : h.message;
+  }
+}
+
+function showHearGain(db) {
+  $("#hear-gain").value = db;
+  $("#hear-gain-value").textContent = formatDb(db);
+  $("#hear-gain").setAttribute("aria-valuetext", formatDb(db));
+}
+
+$("#hear-sounds").addEventListener("click", () => attempt(api("PATCH", "/api/soundboard", { hear_sounds: !state.hear_sounds })));
+const sendHearGain = throttle((db) => attempt(api("PATCH", "/api/soundboard", { hear_sounds_db: db })), 60);
+$("#hear-gain").addEventListener("input", () => {
+  const db = Number($("#hear-gain").value);
+  showHearGain(db);
+  sendHearGain(db);
+});
 
 function soundTile(sound) {
   const ready = sound.state === "ready";

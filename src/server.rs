@@ -2,7 +2,7 @@
 
 use crate::backend::PLATFORM_SUPPORTED;
 use crate::config::{DeviceRef, Hotkey, SourceKind};
-use crate::engine::{ChannelPatch, Engine, SoundPatch};
+use crate::engine::{ChannelPatch, Engine, SoundPatch, SoundboardPatch};
 use crate::platform;
 use crate::soundboard::MAX_FILE_BYTES;
 use axum::body::Bytes;
@@ -86,6 +86,7 @@ pub fn router(engine: Arc<Engine>, port: u16, quit: Arc<dyn Fn() + Send + Sync>)
             post(add_sound).layer(DefaultBodyLimit::max(MAX_FILE_BYTES + 1024)),
         )
         .route("/api/sounds/stop", post(stop_sounds))
+        .route("/api/soundboard", patch(update_soundboard))
         .route("/api/sounds/{id}", patch(update_sound).delete(remove_sound))
         .route("/api/sounds/{id}/play", post(play_sound))
         .route("/api/quit", post(quit_app))
@@ -268,6 +269,15 @@ async fn remove_sound(State(app): State<App>, Path(id): Path<String>) -> ApiResu
 
 async fn play_sound(State(app): State<App>, Path(id): Path<String>) -> ApiResult {
     app.engine.play_sound(&id).map_err(bad)?;
+    ok()
+}
+
+async fn update_soundboard(State(app): State<App>, Json(body): Json<SoundboardPatch>) -> ApiResult {
+    // Switching Hear sounds on queries the default output, which can block.
+    blocking(&app, StatusCode::BAD_REQUEST, move |e| {
+        e.update_soundboard(body)
+    })
+    .await?;
     ok()
 }
 

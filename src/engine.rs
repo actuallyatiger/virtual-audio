@@ -13,7 +13,7 @@ use crate::config::{
     SourceKind, db_to_gain, new_id,
 };
 use crate::dsp::{ProcessingControl, Processor};
-use crate::mixer::{ChannelControl, Mixer, push_frames, source_ring};
+use crate::mixer::{ChannelControl, Mixer, MonitorTap, push_frames, source_ring};
 use crate::soundboard::{self, MAX_FILE_BYTES, MAX_SOUNDS, Player};
 use anyhow::{Context, anyhow, bail};
 use serde::{Deserialize, Serialize};
@@ -105,20 +105,61 @@ struct Inner {
     output_status: SharedStatus,
     /// UI connections that have Listen switched on.
     listeners: HashSet<u64>,
-    monitor: Option<Worker>,
-    monitor_status: SharedStatus,
-    /// (default output id, mix output id) the monitor was last set up for;
-    /// a change means it must be re-checked and restarted.
-    monitor_key: Option<(Option<String>, Option<String>)>,
-    monitor_retry_at: Instant,
+    /// The whole mix on the default output, while anyone has Listen on.
+    listen: Monitor,
+    /// Just the soundboard on the default output (unless Listen is on,
+    /// which already includes it).
+    hear: Monitor,
     dirty: bool,
     save_error: Option<String>,
     /// Sounds that failed to load at startup, with why.
     sound_errors: HashMap<String, String>,
 }
 
-/// Where the render thread copies the final mix while someone is listening.
-type MonitorTap = Arc<Mutex<Option<rtrb::Producer<f32>>>>;
+/// Something played on the Windows default output (your headphones), fed
+/// from a tap: Listen (the final mix) or Hear sounds (the soundboard).
+struct Monitor {
+    /// What it's for, in messages: "listen", "hear sounds".
+    what: &'static str,
+    tap: MonitorTap,
+    /// Its volume.
+    ctrl: Arc<ChannelControl>,
+    worker: Option<Worker>,
+    status: SharedStatus,
+    /// (default output id, mix output id) it was last set up for; a change
+    /// means it must be re-checked and restarted.
+    key: Option<(Option<String>, Option<String>)>,
+    retry_at: Instant,
+}
+
+impl Monitor {
+    fn new(what: &'static str, tap: MonitorTap, ctrl: Arc<ChannelControl>) -> Self {
+        Self {
+            what,
+            tap,
+            ctrl,
+            worker: None,
+            status: Arc::new(Mutex::new(Status::new("idle", ""))),
+            key: None,
+            retry_at: Instant::now(),
+        }
+    }
+
+    fn stop(&mut self) {
+        *self.tap.lock().unwrap() = None;
+        if let Some(w) = self.worker.take() {
+            w.stop();
+        }
+        self.key = None;
+        self.status = Arc::new(Mutex::new(Status::new("idle", "")));
+    }
+
+    /// Shows why it can't play; the supervisor re-checks when devices change.
+    fn refuse(&mut self, message: String) {
+        tracing::warn!("{}: {message}", self.what);
+        self.status = Arc::new(Mutex::new(Status::new("error", message)));
+    }
+}
 
 pub struct Engine {
     backend: Arc<dyn Backend>,
@@ -143,6 +184,12 @@ pub struct ChannelPatch {
     pub noise_suppression: Option<bool>,
     pub noise_gate: Option<bool>,
     pub gate_db: Option<f32>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct SoundboardPatch {
+    pub hear_sounds: Option<bool>,
+    pub hear_sounds_db: Option<f32>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -184,6 +231,10 @@ pub struct StateView {
     pub hotkeys: Vec<Hotkey>,
     /// Listen (monitor the mix on the default output) status.
     pub monitor: Status,
+    pub hear_sounds: bool,
+    pub hear_sounds_db: f32,
+    /// Hear sounds status.
+    pub hear_status: Status,
     pub sounds: Vec<SoundView>,
 }
 
@@ -208,6 +259,21 @@ impl Engine {
             config.master.muted,
         ));
         let mixer = Arc::new(Mutex::new(Mixer::new(master.clone())));
+        let tap: MonitorTap = Arc::default();
+        let player = Arc::new(Player::default());
+        let listen = Monitor::new(
+            "listen",
+            tap.clone(),
+            Arc::new(ChannelControl::new(1.0, false)),
+        );
+        let hear = Monitor::new(
+            "hear sounds",
+            player.tap.clone(),
+            Arc::new(ChannelControl::new(
+                db_to_gain(config.hear_sounds_db),
+                false,
+            )),
+        );
         let mut sources = HashMap::new();
         for s in &config.sources {
             sources.insert(s.id.clone(), SourceRuntime::new(s));
@@ -220,18 +286,16 @@ impl Engine {
                 output: None,
                 output_status: Arc::new(Mutex::new(Status::default())),
                 listeners: HashSet::new(),
-                monitor: None,
-                monitor_status: Arc::new(Mutex::new(Status::new("idle", ""))),
-                monitor_key: None,
-                monitor_retry_at: Instant::now(),
+                listen,
+                hear,
                 dirty: false,
                 save_error: None,
                 sound_errors: HashMap::new(),
             }),
             master,
             mixer,
-            player: Arc::new(Player::default()),
-            tap: Arc::new(Mutex::new(None)),
+            player,
+            tap,
             changed: tokio::sync::watch::channel(0).0,
             shutdown: AtomicBool::new(false),
             supervising: Mutex::new(()),
@@ -283,7 +347,8 @@ impl Engine {
         if let Some(w) = inner.output.take() {
             w.stop();
         }
-        self.stop_monitor(&mut inner);
+        inner.listen.stop();
+        inner.hear.stop();
         for rt in inner.sources.values_mut() {
             if let Some(w) = rt.capture.take() {
                 w.stop();
@@ -318,7 +383,10 @@ impl Engine {
                 })
                 .collect(),
             hotkeys: inner.config.hotkeys.clone(),
-            monitor: inner.monitor_status.lock().unwrap().clone(),
+            monitor: inner.listen.status.lock().unwrap().clone(),
+            hear_sounds: inner.config.hear_sounds,
+            hear_sounds_db: inner.config.hear_sounds_db,
+            hear_status: inner.hear.status.lock().unwrap().clone(),
             sounds: inner
                 .config
                 .sounds
@@ -788,7 +856,7 @@ impl Engine {
         if on && self.shutdown.load(Ordering::Relaxed) {
             return;
         }
-        let started = {
+        let toggled = {
             let mut inner = self.inner.lock().unwrap();
             let was = !inner.listeners.is_empty();
             if on {
@@ -798,79 +866,103 @@ impl Engine {
             }
             let now = !inner.listeners.is_empty();
             if was && !now {
-                self.stop_monitor(&mut inner);
+                inner.listen.stop();
                 self.changed.send_modify(|v| *v += 1);
             }
-            !was && now
+            was != now
         };
-        if started {
-            // Start it now rather than at the next supervisor tick.
+        if toggled {
+            // Start Listen (or Hear sounds, which pauses while Listen is on)
+            // now rather than at the next supervisor tick.
             self.supervise();
         }
     }
 
-    /// Starts, restarts or refuses the monitor as needed. Called by
+    pub fn update_soundboard(&self, patch: SoundboardPatch) -> anyhow::Result<()> {
+        if patch.hear_sounds_db.is_some_and(|db| !db.is_finite()) {
+            bail!("invalid volume");
+        }
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(db) = patch.hear_sounds_db {
+            inner.config.hear_sounds_db = db.clamp(-60.0, 12.0);
+            inner
+                .hear
+                .ctrl
+                .set_gain(db_to_gain(inner.config.hear_sounds_db));
+        }
+        let toggled = patch
+            .hear_sounds
+            .is_some_and(|on| on != inner.config.hear_sounds);
+        if let Some(on) = patch.hear_sounds {
+            inner.config.hear_sounds = on;
+        }
+        self.bump(&mut inner);
+        drop(inner);
+        if toggled {
+            self.supervise();
+        }
+        Ok(())
+    }
+
+    /// Starts, restarts, refuses or stops a monitor as needed. Called by
     /// supervise() with the current default output; returns whether the
     /// visible state changed.
     fn supervise_monitor(
         &self,
-        inner: &mut Inner,
-        default_output: Option<DeviceInfo>,
+        m: &mut Monitor,
+        wanted: bool,
+        output: Option<&DeviceRef>,
+        default_output: Option<&DeviceInfo>,
         now: Instant,
     ) -> bool {
-        if inner.listeners.is_empty() {
-            return false;
+        if !wanted {
+            let active = m.worker.is_some() || m.key.is_some();
+            if active {
+                m.stop();
+            }
+            return active;
         }
-        let output = inner.config.output.clone();
         let key = (
-            default_output.as_ref().map(|d| d.id.clone()),
-            output.as_ref().map(|d| d.id.clone()),
+            default_output.map(|d| d.id.clone()),
+            output.map(|d| d.id.clone()),
         );
-        if inner.monitor_key.as_ref() == Some(&key) {
-            match &inner.monitor {
+        if m.key.as_ref() == Some(&key) {
+            match &m.worker {
                 Some(w) if !w.finished() => return false, // healthy
-                Some(_) if now < inner.monitor_retry_at => return false,
+                Some(_) if now < m.retry_at => return false,
                 None => return false, // refused; waits for a device change
                 Some(_) => {}         // failed: retry
             }
         }
-        self.stop_monitor(inner);
-        inner.monitor_key = Some(key);
-        inner.monitor_retry_at = now + RETRY_DELAY;
+        m.stop();
+        m.key = Some(key);
+        m.retry_at = now + RETRY_DELAY;
         match default_output {
-            None => refuse_monitor(inner, "No default output device to listen on".into()),
-            Some(dev) if output.as_ref().is_some_and(|o| o.id == dev.id) => refuse_monitor(
-                inner,
-                format!(
-                    "Your Windows default output is “{}”, which the mix already goes to. \
-                     Set your headphones as the default output to listen.",
-                    dev.name
-                ),
-            ),
-            Some(dev) => self.start_monitor(inner, dev),
+            None => m.refuse(format!("No default output device to {} on", m.what)),
+            Some(dev) if output.is_some_and(|o| o.id == dev.id) => m.refuse(format!(
+                "Your Windows default output is “{}”, which the mix already goes to. \
+                 Set your headphones as the default output to {}.",
+                dev.name, m.what
+            )),
+            Some(dev) => self.start_monitor(m, dev.clone()),
         }
         true
     }
 
-    fn start_monitor(&self, inner: &mut Inner, device: DeviceInfo) {
+    fn start_monitor(&self, m: &mut Monitor, device: DeviceInfo) {
         let (tx, rx) = source_ring();
-        *self.tap.lock().unwrap() = Some(tx);
+        *m.tap.lock().unwrap() = Some(tx);
+        // A one-input mixer gives us priming, drift trimming and gain ramps.
+        let mut mixer = Mixer::new(Arc::new(ChannelControl::new(1.0, false)));
+        mixer.set_input("monitor", m.ctrl.clone(), rx);
         let status = Arc::new(Mutex::new(Status::new("waiting", "Starting…")));
-        inner.monitor_status = status.clone();
+        m.status = status.clone();
         let backend = self.backend.clone();
         let changed = self.changed.clone();
-        inner.monitor = Some(Worker::spawn("monitor".into(), move |stop| {
-            monitor_thread(&*backend, rx, device, &status, &stop, &changed)
+        let what = m.what;
+        m.worker = Some(Worker::spawn(what.into(), move |stop| {
+            monitor_thread(&*backend, mixer, device, what, &status, &stop, &changed)
         }));
-    }
-
-    fn stop_monitor(&self, inner: &mut Inner) {
-        *self.tap.lock().unwrap() = None;
-        if let Some(w) = inner.monitor.take() {
-            w.stop();
-        }
-        inner.monitor_key = None;
-        inner.monitor_status = Arc::new(Mutex::new(Status::new("idle", "")));
     }
 
     /// Reorders sources to match `ids`, which must list every source once.
@@ -902,7 +994,7 @@ impl Engine {
         let now = Instant::now();
 
         // 1. Snapshot under the lock.
-        let (sources, pids, wants_default, to_resolve, listening) = {
+        let (sources, pids, wants_default, to_resolve, monitoring) = {
             let inner = self.inner.lock().unwrap();
             let mut pids = Vec::new();
             let mut wants_default = false;
@@ -924,7 +1016,7 @@ impl Engine {
                 pids,
                 wants_default,
                 to_resolve,
-                !inner.listeners.is_empty(),
+                !inner.listeners.is_empty() || hear_wanted(&inner),
             )
         };
 
@@ -932,7 +1024,7 @@ impl Engine {
         let default_input = wants_default
             .then(|| self.backend.default_input())
             .flatten();
-        let default_output = listening.then(|| self.backend.default_output()).flatten();
+        let default_output = monitoring.then(|| self.backend.default_output()).flatten();
         let alive: HashMap<u32, bool> = pids
             .into_iter()
             .map(|pid| (pid, self.backend.process_alive(pid)))
@@ -953,7 +1045,19 @@ impl Engine {
             self.restart_output(&mut inner);
             changed = true;
         }
-        changed |= self.supervise_monitor(&mut inner, default_output, now);
+        let output = inner.config.output.clone();
+        let (listening, hearing) = (!inner.listeners.is_empty(), hear_wanted(&inner));
+        let fields = &mut *inner; // borrow both monitors at once
+        let (listen, hear) = (&mut fields.listen, &mut fields.hear);
+        changed |= self.supervise_monitor(
+            listen,
+            listening,
+            output.as_ref(),
+            default_output.as_ref(),
+            now,
+        );
+        changed |=
+            self.supervise_monitor(hear, hearing, output.as_ref(), default_output.as_ref(), now);
         let output_name = inner.config.output.as_ref().map(|o| o.name.clone());
         for src in &sources {
             let Some(rt) = inner.sources.get_mut(&src.id) else {
@@ -1186,10 +1290,16 @@ fn feeds_back(capture: &str, output: &str) -> bool {
     capture.contains("output") && capture.replacen("output", "input", 1) == output.to_lowercase()
 }
 
-/// Shows why Listen can't run; the supervisor re-checks when devices change.
-fn refuse_monitor(inner: &mut Inner, message: String) {
-    tracing::warn!("listen: {message}");
-    inner.monitor_status = Arc::new(Mutex::new(Status::new("error", message)));
+/// Hear sounds plays while it's on, the soundboard is in the mix, and Listen
+/// is off (Listen already includes the soundboard).
+fn hear_wanted(inner: &Inner) -> bool {
+    inner.config.hear_sounds
+        && inner.listeners.is_empty()
+        && inner
+            .config
+            .sources
+            .iter()
+            .any(|s| s.kind == SourceKind::Soundboard)
 }
 
 fn display_exe(exe: &str) -> String {
@@ -1335,11 +1445,12 @@ fn render_thread(
     }
 }
 
-/// Plays the tapped mix on the Windows default output (Listen).
+/// Plays a monitor's tap (via `mixer`) on the Windows default output.
 fn monitor_thread(
     backend: &dyn Backend,
-    rx: rtrb::Consumer<f32>,
+    mut mixer: Mixer,
     dev: DeviceInfo,
+    what: &str,
     status: &SharedStatus,
     stop: &AtomicBool,
     changed: &tokio::sync::watch::Sender<u64>,
@@ -1347,7 +1458,7 @@ fn monitor_thread(
     // Once stopped (replaced or turned off), stay quiet. Errors end the
     // thread; the supervisor retries.
     let fail = |msg: String| {
-        tracing::warn!("listen: {msg}");
+        tracing::warn!("{what}: {msg}");
         if !stop.load(Ordering::Relaxed) {
             set_status(status, "error", msg);
             changed.send_modify(|v| *v += 1);
@@ -1358,16 +1469,12 @@ fn monitor_thread(
         Ok(s) => s,
         Err(e) => return fail(format!("{}: {e:#}", dev.name)),
     };
-    tracing::info!("listen: playing the mix on {:?}", dev.name);
+    tracing::info!("{what}: playing on {:?}", dev.name);
     if stop.load(Ordering::Relaxed) {
         return;
     }
     set_status(status, "running", dev.name);
     changed.send_modify(|v| *v += 1);
-
-    // A one-input mixer gives us priming, drift trimming and gain ramps.
-    let mut mixer = Mixer::new(Arc::new(ChannelControl::new(1.0, false)));
-    mixer.set_input("mix", Arc::new(ChannelControl::new(1.0, false)), rx);
     while !stop.load(Ordering::Relaxed) {
         if let Err(e) = stream.render(&mut |buf| mixer.process(buf)) {
             return fail(format!("{e:#}"));
@@ -1643,6 +1750,55 @@ mod tests {
         assert!(!file.exists(), "file deleted");
         assert_eq!(engine.hotkeys().len(), 2, "its hotkey went with it");
         assert!(engine.play_sound(&id).is_err());
+        engine.shutdown();
+    }
+
+    /// Waits up to 3 s for Hear sounds to reach a state.
+    fn wait_hear(engine: &Engine, state: &str) -> Status {
+        for _ in 0..300 {
+            let status = engine.state().hear_status;
+            if status.state == state {
+                return status;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        engine.state().hear_status
+    }
+
+    #[test]
+    fn hear_sounds_plays_unless_listen_is_on() {
+        let engine = engine("cable");
+        assert_eq!(
+            engine.state().hear_status.state,
+            "idle",
+            "no soundboard yet"
+        );
+        engine.add_sound(None, "a.wav", wav()).unwrap();
+        assert_eq!(wait_hear(&engine, "running").state, "running");
+
+        // Listen includes the soundboard, so Hear sounds pauses meanwhile.
+        engine.set_listening(1, true);
+        assert_eq!(wait_hear(&engine, "idle").state, "idle");
+        assert_eq!(wait_monitor(&engine, "running").state, "running");
+        engine.set_listening(1, false);
+        assert_eq!(wait_hear(&engine, "running").state, "running");
+
+        let off = SoundboardPatch {
+            hear_sounds: Some(false),
+            hear_sounds_db: Some(-6.0),
+        };
+        engine.update_soundboard(off).unwrap();
+        assert_eq!(engine.state().hear_status.state, "idle");
+        assert_eq!(engine.state().hear_sounds_db, -6.0);
+        engine.shutdown();
+    }
+
+    #[test]
+    fn hear_sounds_refuses_the_mix_output() {
+        let engine = engine("phones");
+        engine.add_sound(None, "a.wav", wav()).unwrap();
+        let status = wait_hear(&engine, "error");
+        assert!(status.message.contains("hear sounds"), "{}", status.message);
         engine.shutdown();
     }
 
