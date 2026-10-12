@@ -409,10 +409,16 @@ impl Engine {
 
     pub fn remove_source(&self, id: &str) -> anyhow::Result<()> {
         let mut inner = self.inner.lock().unwrap();
-        let before = inner.config.sources.len();
-        inner.config.sources.retain(|s| s.id != id);
-        if inner.config.sources.len() == before {
-            bail!("no such source");
+        let index = inner
+            .config
+            .sources
+            .iter()
+            .position(|s| s.id == id)
+            .ok_or_else(|| anyhow!("no such source"))?;
+        if inner.config.sources.remove(index).kind == SourceKind::Soundboard {
+            // Nothing plays them any more; don't let them resume when the
+            // soundboard comes back.
+            self.player.clear();
         }
         if let Some(rt) = inner.sources.remove(id)
             && let Some(w) = rt.capture
@@ -428,6 +434,9 @@ impl Engine {
     pub fn update_channel(&self, id: &str, patch: ChannelPatch) -> anyhow::Result<()> {
         if let Some(name) = &patch.name {
             check_len("name", name.trim(), MAX_NAME_CHARS)?;
+        }
+        if patch.gate_db.is_some_and(|db| !db.is_finite()) {
+            bail!("invalid gate level");
         }
         let processing_patch = patch.noise_suppression.is_some()
             || patch.noise_gate.is_some()
@@ -465,9 +474,6 @@ impl Engine {
                 processing.set_gate(on);
             }
             if let Some(db) = patch.gate_db {
-                if !db.is_finite() {
-                    bail!("invalid gate level");
-                }
                 src.processing.gate_db = db.clamp(-60.0, 0.0);
                 processing.set_threshold_db(src.processing.gate_db);
             }
@@ -579,11 +585,12 @@ impl Engine {
             .name("load sounds".into())
             .spawn(move || {
                 for sound in sounds {
-                    let path = soundboard::sounds_dir().join(&sound.file);
                     let ext = soundboard::extension(&sound.file);
-                    let result = std::fs::read(&path)
-                        .with_context(|| format!("reading {}", path.display()))
-                        .and_then(|bytes| soundboard::decode(bytes, Some(&ext)));
+                    let result = soundboard::sound_path(&sound.file).and_then(|path| {
+                        let bytes = std::fs::read(&path)
+                            .with_context(|| format!("reading {}", path.display()))?;
+                        soundboard::decode(bytes, Some(&ext))
+                    });
                     let Some(engine) = weak.upgrade() else { return };
                     let mut inner = engine.inner.lock().unwrap();
                     // It may have been removed or changed while loading.
@@ -652,6 +659,17 @@ impl Engine {
             let _ = std::fs::remove_file(&path);
             bail!("too many sounds (max {MAX_SOUNDS})");
         }
+        let add_board = !inner
+            .config
+            .sources
+            .iter()
+            .any(|s| s.kind == SourceKind::Soundboard);
+        // Before committing the sound, so a failure leaves nothing behind.
+        if add_board && let Err(e) = push_source(&mut inner, None, SourceKind::Soundboard) {
+            drop(inner);
+            let _ = std::fs::remove_file(&path);
+            return Err(e);
+        }
         self.player.insert(&id, samples, 1.0);
         inner.config.sounds.push(SoundConfig {
             id: id.clone(),
@@ -659,14 +677,6 @@ impl Engine {
             file,
             gain_db: 0.0,
         });
-        let add_board = !inner
-            .config
-            .sources
-            .iter()
-            .any(|s| s.kind == SourceKind::Soundboard);
-        if add_board {
-            push_source(&mut inner, None, SourceKind::Soundboard)?;
-        }
         self.bump(&mut inner);
         drop(inner);
         if add_board {
@@ -711,11 +721,15 @@ impl Engine {
         self.player.remove(id);
         self.bump(&mut inner);
         drop(inner);
-        let path = soundboard::sounds_dir().join(&sound.file);
-        if let Err(e) = std::fs::remove_file(&path)
-            && e.kind() != std::io::ErrorKind::NotFound
-        {
-            tracing::warn!("deleting {}: {e}", path.display());
+        match soundboard::sound_path(&sound.file) {
+            Ok(path) => {
+                if let Err(e) = std::fs::remove_file(&path)
+                    && e.kind() != std::io::ErrorKind::NotFound
+                {
+                    tracing::warn!("deleting {}: {e}", path.display());
+                }
+            }
+            Err(e) => tracing::warn!("not deleting sound file: {e:#}"),
         }
         Ok(())
     }
@@ -724,6 +738,14 @@ impl Engine {
         let inner = self.inner.lock().unwrap();
         if !inner.config.sounds.iter().any(|s| s.id == id) {
             bail!("no such sound");
+        }
+        if !inner
+            .config
+            .sources
+            .iter()
+            .any(|s| s.kind == SourceKind::Soundboard)
+        {
+            bail!("the soundboard isn't in the mix; add it back first");
         }
         if !self.player.play(id) {
             match inner.sound_errors.get(id) {
@@ -1625,6 +1647,86 @@ mod tests {
     }
 
     #[test]
+    fn removing_the_soundboard_stops_its_sounds() {
+        let engine = engine("cable");
+        let id = engine.add_sound(None, "a.wav", wav()).unwrap();
+        engine.play_sound(&id).unwrap();
+        let board = soundboards(&engine)[0].id.clone();
+        engine.remove_source(&board).unwrap();
+        assert!(engine.playing_sounds().is_empty(), "nothing left queued");
+        let err = engine.play_sound(&id).unwrap_err();
+        assert!(err.to_string().contains("isn't in the mix"), "{err}");
+        engine.add_source(None, SourceKind::Soundboard).unwrap();
+        engine.play_sound(&id).unwrap();
+        engine.shutdown();
+    }
+
+    #[test]
+    fn a_failed_upload_leaves_nothing_behind() {
+        let engine = engine("cable");
+        // Fill the mix so the soundboard can't be added.
+        for i in 3..MAX_SOURCES {
+            let kind = SourceKind::App {
+                exe: format!("{i}.exe"),
+            };
+            engine.add_source(None, kind).unwrap();
+        }
+        // Other tests share the sounds folder; only this one stores .flac.
+        let files = || {
+            std::fs::read_dir(soundboard::sounds_dir()).map_or(0, |d| {
+                d.filter(|e| {
+                    e.as_ref()
+                        .is_ok_and(|e| e.path().extension() == Some("flac".as_ref()))
+                })
+                .count()
+            })
+        };
+        let before = files();
+        let err = engine.add_sound(None, "a.flac", wav()).unwrap_err();
+        assert!(err.to_string().contains("too many sources"), "{err}");
+        assert!(engine.state().sounds.is_empty());
+        assert_eq!(files(), before, "file removed again");
+        engine.shutdown();
+    }
+
+    #[test]
+    fn saved_sounds_load_at_startup() {
+        engine("cable").shutdown(); // isolates the data dir
+        std::fs::create_dir_all(soundboard::sounds_dir()).unwrap();
+        let file = format!("{}.wav", new_id("t"));
+        std::fs::write(soundboard::sounds_dir().join(&file), wav()).unwrap();
+        let sound = |id: &str, file: &str| SoundConfig {
+            id: id.into(),
+            name: id.into(),
+            file: file.into(),
+            gain_db: 0.0,
+        };
+        let config = Config {
+            sounds: vec![
+                sound("good", &file),
+                sound("missing", "nope.wav"),
+                sound("escape", "../config.json"),
+            ],
+            ..Config::default()
+        };
+        let engine = Engine::new(Box::new(TestBackend), config);
+        let mut states = Vec::new();
+        for _ in 0..300 {
+            states = engine.state().sounds.iter().map(|s| s.state).collect();
+            if !states.contains(&"loading") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(states, ["ready", "error", "error"]);
+        engine.add_source(None, SourceKind::Soundboard).unwrap();
+        engine.play_sound("good").unwrap();
+        let err = engine.play_sound("missing").unwrap_err();
+        assert!(err.to_string().contains("nope.wav"), "{err}");
+        engine.shutdown();
+    }
+
+    #[test]
     fn processing_is_for_microphones_only() {
         let engine = engine("cable");
         let suppress = || ChannelPatch {
@@ -1651,6 +1753,20 @@ mod tests {
                 },
             )
             .unwrap();
+        // A bad value rejects the whole patch, applying nothing.
+        let bad = ChannelPatch {
+            noise_gate: Some(false),
+            gate_db: Some(f32::INFINITY),
+            ..Default::default()
+        };
+        assert!(engine.update_channel(&mic, bad).is_err());
+        // A bad value rejects the whole patch, applying nothing.
+        let bad = ChannelPatch {
+            noise_gate: Some(false),
+            gate_db: Some(f32::INFINITY),
+            ..Default::default()
+        };
+        assert!(engine.update_channel(&mic, bad).is_err());
         let src = engine
             .state()
             .sources

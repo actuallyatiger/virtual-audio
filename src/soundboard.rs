@@ -21,10 +21,22 @@ pub const MAX_FILE_BYTES: usize = 20 << 20;
 const MAX_SECONDS: u64 = 60;
 /// Stopping or restarting a sound fades it out over 5 ms instead of clicking.
 const FADE_FRAMES: usize = 240;
-const BLOCK_FRAMES: usize = 480;
+/// The soundboard is mixed in 10 ms blocks.
+const BLOCK_FRAMES: usize = SAMPLE_RATE as usize / 100;
 
 pub fn sounds_dir() -> PathBuf {
     crate::config::data_dir().join("sounds")
+}
+
+/// Where a sound's file lives. `file` comes from config.json, which can be
+/// edited by hand, so anything but a plain file name (a path that would
+/// reach outside the sounds folder) is refused.
+pub fn sound_path(file: &str) -> anyhow::Result<PathBuf> {
+    let name = std::path::Path::new(file).file_name();
+    if file.is_empty() || name != Some(file.as_ref()) {
+        bail!("invalid sound file name {file:?}");
+    }
+    Ok(sounds_dir().join(file))
 }
 
 /// The extension to store an upload under: its own if it's a known audio
@@ -101,6 +113,10 @@ pub fn decode(bytes: Vec<u8>, extension: Option<&str>) -> anyhow::Result<Vec<f32
             Err(e) => return Err(e).context("decoding the file"),
         };
         let spec = *decoded.spec();
+        // Also bounds the resampler's work and memory for a corrupt header.
+        if !(8_000..=384_000).contains(&spec.rate) {
+            bail!("unsupported sample rate ({} Hz)", spec.rate);
+        }
         if *rate.get_or_insert(spec.rate) != spec.rate {
             bail!("the sample rate changes partway through the file");
         }
@@ -201,6 +217,9 @@ struct Clip {
 struct Voice {
     id: String,
     clip: Arc<Clip>,
+    /// Gain applied at the end of the last block; volume changes ramp from
+    /// it across the next block rather than jumping.
+    gain: f32,
     /// Next frame to play.
     pos: usize,
     /// Frames left in a fade-out, once stopped.
@@ -229,11 +248,19 @@ impl Player {
         self.state.lock().unwrap().clips.insert(id.to_owned(), clip);
     }
 
-    /// Unloads a sound, cutting it off if it is playing.
+    /// Unloads a sound, fading it out if it is playing.
     pub fn remove(&self, id: &str) {
         let mut state = self.state.lock().unwrap();
         state.clips.remove(id);
-        state.voices.retain(|v| v.id != id);
+        for v in state.voices.iter_mut().filter(|v| v.id == id) {
+            v.fade.get_or_insert(FADE_FRAMES);
+        }
+    }
+
+    /// Drops everything playing at once; for when nothing is mixing the
+    /// soundboard any more, so fades would never finish.
+    pub fn clear(&self) {
+        self.state.lock().unwrap().voices.clear();
     }
 
     pub fn contains(&self, id: &str) -> bool {
@@ -257,9 +284,11 @@ impl Player {
         for v in state.voices.iter_mut().filter(|v| v.id == id) {
             v.fade.get_or_insert(FADE_FRAMES);
         }
+        let gain = f32::from_bits(clip.gain.load(Ordering::Relaxed));
         state.voices.push(Voice {
             id: id.to_owned(),
             clip,
+            gain,
             pos: 0,
             fade: None,
         });
@@ -289,8 +318,10 @@ impl Player {
     fn mix(&self, out: &mut [f32]) {
         out.fill(0.0);
         let mut state = self.state.lock().unwrap();
+        let frames = (out.len() / CHANNELS) as f32;
         for v in &mut state.voices {
-            let gain = f32::from_bits(v.clip.gain.load(Ordering::Relaxed));
+            let target = f32::from_bits(v.clip.gain.load(Ordering::Relaxed));
+            let step = (target - v.gain) / frames;
             let rest = v.clip.samples.get(v.pos * CHANNELS..).unwrap_or(&[]);
             for (o, frame) in out
                 .as_chunks_mut::<CHANNELS>()
@@ -298,18 +329,21 @@ impl Player {
                 .iter_mut()
                 .zip(rest.as_chunks::<CHANNELS>().0)
             {
+                v.gain += step;
                 let g = match &mut v.fade {
                     Some(0) => break,
                     Some(left) => {
                         *left -= 1;
-                        gain * *left as f32 / FADE_FRAMES as f32
+                        v.gain * *left as f32 / FADE_FRAMES as f32
                     }
-                    None => gain,
+                    None => v.gain,
                 };
                 o[0] += frame[0] * g;
                 o[1] += frame[1] * g;
                 v.pos += 1;
             }
+            // Land exactly on the target despite rounding in the steps.
+            v.gain = target;
         }
         state
             .voices
@@ -336,7 +370,7 @@ impl Stream {
 
 impl CaptureStream for Stream {
     fn read(&mut self, sink: &mut dyn FnMut(&[f32])) -> anyhow::Result<()> {
-        let period = Duration::from_millis(10);
+        let period = Duration::from_secs_f64(BLOCK_FRAMES as f64 / SAMPLE_RATE as f64);
         let now = Instant::now();
         if now > self.next + 20 * period {
             // Fell far behind (the PC was asleep or busy): don't burst.
@@ -449,18 +483,41 @@ mod tests {
         assert_eq!(buf[(FADE_FRAMES + 1) * 2], 0.5, "old copy gone");
         assert_eq!(player.playing(), vec!["a"]);
 
+        // A volume change ramps across one block instead of jumping.
         player.set_gain("a", 0.0);
         player.mix(&mut buf);
-        assert!(
-            buf.iter().all(|&s| s == 0.0),
-            "volume applies while playing"
-        );
+        assert!(buf[0] > 0.49 && buf[0] < 0.5, "starts near the old level");
+        assert!(buf[478 * 2] > 0.0 && buf[478 * 2] < 0.01, "ends near zero");
+        assert!(buf.windows(4).all(|w| w[2] <= w[0]), "smooth fall");
+        player.mix(&mut buf);
+        assert!(buf.iter().all(|&s| s == 0.0), "then silent");
 
         player.stop_all();
         assert!(player.playing().is_empty());
         player.mix(&mut buf);
         player.mix(&mut buf);
         assert!(player.state.lock().unwrap().voices.is_empty());
+    }
+
+    #[test]
+    fn removing_fades_and_clearing_drops() {
+        let player = Player::default();
+        player.insert("a", vec![0.5; 4_000 * 2], 1.0);
+        player.play("a");
+        player.remove("a");
+        assert!(!player.contains("a"));
+        let mut buf = vec![0.0; 960];
+        player.mix(&mut buf);
+        assert!(buf[0] > 0.0, "fades rather than cuts");
+        assert_eq!(buf[FADE_FRAMES * 2], 0.0);
+        assert!(player.state.lock().unwrap().voices.is_empty());
+
+        player.insert("b", vec![0.5; 4_000 * 2], 1.0);
+        player.play("b");
+        player.clear();
+        assert!(player.playing().is_empty());
+        player.mix(&mut buf);
+        assert!(buf.iter().all(|&s| s == 0.0));
     }
 
     #[test]
@@ -473,6 +530,23 @@ mod tests {
         assert_eq!(buf[99 * 2], 0.25);
         assert_eq!(buf[100 * 2], 0.0);
         assert!(player.playing().is_empty());
+    }
+
+    #[test]
+    fn sound_paths_stay_in_the_sounds_folder() {
+        assert!(sound_path("snd1.mp3").unwrap().starts_with(sounds_dir()));
+        for bad in [
+            "",
+            "../config.json",
+            "a/b.mp3",
+            "/etc/passwd",
+            "..",
+            "C:\\x.mp3",
+        ] {
+            if cfg!(windows) || !bad.contains('\\') {
+                assert!(sound_path(bad).is_err(), "{bad:?}");
+            }
+        }
     }
 
     #[test]
