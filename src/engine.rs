@@ -2,16 +2,20 @@
 //!
 //! * One render thread pulls from the [`Mixer`] at the output device's pace
 //!   (or a 10 ms timer when no device is available).
-//! * One capture thread per source pushes into that source's ring buffer.
+//! * One capture thread per source pushes into that source's ring buffer
+//!   (the soundboard's "capture" mixes the sounds that are playing).
 //! * A supervisor thread (re)starts captures when apps launch/exit or devices
 //!   come and go, and persists configuration changes.
 
-use crate::backend::{Backend, CaptureTarget, DeviceInfo, NullRender, RenderStream};
+use crate::backend::{Backend, CaptureStream, CaptureTarget, DeviceInfo, NullRender, RenderStream};
 use crate::config::{
-    Channel, Config, DeviceRef, Hotkey, SourceConfig, SourceKind, db_to_gain, new_id,
+    Channel, Config, DeviceRef, Hotkey, HotkeyAction, Processing, SoundConfig, SourceConfig,
+    SourceKind, db_to_gain, new_id,
 };
+use crate::dsp::{ProcessingControl, Processor};
 use crate::mixer::{ChannelControl, Mixer, push_frames, source_ring};
-use anyhow::{anyhow, bail};
+use crate::soundboard::{self, MAX_FILE_BYTES, MAX_SOUNDS, Player};
+use anyhow::{Context, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -85,6 +89,7 @@ impl Worker {
 
 struct SourceRuntime {
     ctrl: Arc<ChannelControl>,
+    processing: Arc<ProcessingControl>,
     status: SharedStatus,
     capture: Option<Worker>,
     pid: Option<u32>,
@@ -108,6 +113,8 @@ struct Inner {
     monitor_retry_at: Instant,
     dirty: bool,
     save_error: Option<String>,
+    /// Sounds that failed to load at startup, with why.
+    sound_errors: HashMap<String, String>,
 }
 
 /// Where the render thread copies the final mix while someone is listening.
@@ -118,6 +125,7 @@ pub struct Engine {
     inner: Mutex<Inner>,
     master: Arc<ChannelControl>,
     mixer: Arc<Mutex<Mixer>>,
+    player: Arc<Player>,
     tap: MonitorTap,
     changed: tokio::sync::watch::Sender<u64>,
     shutdown: AtomicBool,
@@ -131,6 +139,16 @@ pub struct ChannelPatch {
     pub name: Option<String>,
     pub gain_db: Option<f32>,
     pub muted: Option<bool>,
+    /// Microphone processing, for device sources only.
+    pub noise_suppression: Option<bool>,
+    pub noise_gate: Option<bool>,
+    pub gate_db: Option<f32>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct SoundPatch {
+    pub name: Option<String>,
+    pub gain_db: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -141,7 +159,19 @@ pub struct SourceView {
     pub kind: SourceKind,
     #[serde(flatten)]
     pub channel: Channel,
+    #[serde(flatten)]
+    pub processing: Processing,
     pub status: Status,
+}
+
+#[derive(Serialize)]
+pub struct SoundView {
+    pub id: String,
+    pub name: String,
+    pub gain_db: f32,
+    /// "loading", "ready" or "error".
+    pub state: &'static str,
+    pub message: String,
 }
 
 #[derive(Serialize)]
@@ -154,6 +184,7 @@ pub struct StateView {
     pub hotkeys: Vec<Hotkey>,
     /// Listen (monitor the mix on the default output) status.
     pub monitor: Status,
+    pub sounds: Vec<SoundView>,
 }
 
 #[derive(Serialize)]
@@ -161,6 +192,13 @@ pub struct ChannelMeter {
     pub peak: f32,
     /// False while a push-to-talk/mute hotkey is silencing the channel.
     pub open: bool,
+    /// Device sources: input level after noise suppression, before the
+    /// gain and the noise gate (linear peak).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mic_level: Option<f32>,
+    /// Device sources: whether the noise gate is letting audio through.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mic_gate_open: Option<bool>,
 }
 
 impl Engine {
@@ -172,7 +210,7 @@ impl Engine {
         let mixer = Arc::new(Mutex::new(Mixer::new(master.clone())));
         let mut sources = HashMap::new();
         for s in &config.sources {
-            sources.insert(s.id.clone(), SourceRuntime::new(&s.channel));
+            sources.insert(s.id.clone(), SourceRuntime::new(s));
         }
         let engine = Arc::new(Self {
             backend: Arc::from(backend),
@@ -188,15 +226,18 @@ impl Engine {
                 monitor_retry_at: Instant::now(),
                 dirty: false,
                 save_error: None,
+                sound_errors: HashMap::new(),
             }),
             master,
             mixer,
+            player: Arc::new(Player::default()),
             tap: Arc::new(Mutex::new(None)),
             changed: tokio::sync::watch::channel(0).0,
             shutdown: AtomicBool::new(false),
             supervising: Mutex::new(()),
         });
         engine.restart_output(&mut engine.inner.lock().unwrap());
+        engine.load_sounds();
         let weak = Arc::downgrade(&engine);
         std::thread::Builder::new()
             .name("supervisor".into())
@@ -272,25 +313,52 @@ impl Engine {
                     name: s.name.clone(),
                     kind: s.kind.clone(),
                     channel: s.channel.clone(),
+                    processing: s.processing.clone(),
                     status: inner.sources[&s.id].status.lock().unwrap().clone(),
                 })
                 .collect(),
             hotkeys: inner.config.hotkeys.clone(),
             monitor: inner.monitor_status.lock().unwrap().clone(),
+            sounds: inner
+                .config
+                .sounds
+                .iter()
+                .map(|s| {
+                    let (state, message) = if self.player.contains(&s.id) {
+                        ("ready", String::new())
+                    } else if let Some(e) = inner.sound_errors.get(&s.id) {
+                        ("error", e.clone())
+                    } else {
+                        ("loading", String::new())
+                    };
+                    SoundView {
+                        id: s.id.clone(),
+                        name: s.name.clone(),
+                        gain_db: s.gain_db,
+                        state,
+                        message,
+                    }
+                })
+                .collect(),
         }
     }
 
     pub fn meters(&self) -> HashMap<String, ChannelMeter> {
         let inner = self.inner.lock().unwrap();
         let mut out: HashMap<String, ChannelMeter> = inner
+            .config
             .sources
             .iter()
-            .map(|(id, rt)| {
+            .map(|s| {
+                let rt = &inner.sources[&s.id];
+                let mic = matches!(s.kind, SourceKind::Device { .. });
                 (
-                    id.clone(),
+                    s.id.clone(),
                     ChannelMeter {
                         peak: rt.ctrl.peak(),
                         open: rt.ctrl.gate_open(),
+                        mic_level: mic.then(|| rt.processing.level()),
+                        mic_gate_open: mic.then(|| rt.processing.gate_open()),
                     },
                 )
             })
@@ -300,9 +368,16 @@ impl Engine {
             ChannelMeter {
                 peak: self.master.peak(),
                 open: self.master.gate_open(),
+                mic_level: None,
+                mic_gate_open: None,
             },
         );
         out
+    }
+
+    /// Ids of the soundboard sounds playing now.
+    pub fn playing_sounds(&self) -> Vec<String> {
+        self.player.playing()
     }
 
     pub fn hotkeys(&self) -> Vec<Hotkey> {
@@ -324,34 +399,8 @@ impl Engine {
     // -- mutations ----------------------------------------------------------
 
     pub fn add_source(&self, name: Option<String>, kind: SourceKind) -> anyhow::Result<String> {
-        let name = match (name.filter(|n| !n.trim().is_empty()), &kind) {
-            (Some(n), _) => n.trim().to_owned(),
-            (None, SourceKind::Device { device: Some(d) }) => d.name.clone(),
-            (None, SourceKind::Device { device: None }) => "Default microphone".into(),
-            (None, SourceKind::App { exe }) => display_exe(exe),
-        };
-        if let SourceKind::App { exe } = &kind {
-            if exe.trim().is_empty() {
-                bail!("executable name is required");
-            }
-            check_len("executable name", exe, 260)?;
-        }
-        check_len("name", &name, MAX_NAME_CHARS)?;
         let mut inner = self.inner.lock().unwrap();
-        if inner.config.sources.len() >= MAX_SOURCES {
-            bail!("too many sources (max {MAX_SOURCES})");
-        }
-        let id = new_id("s");
-        let cfg = SourceConfig {
-            id: id.clone(),
-            name,
-            kind,
-            channel: Channel::default(),
-        };
-        inner
-            .sources
-            .insert(id.clone(), SourceRuntime::new(&cfg.channel));
-        inner.config.sources.push(cfg);
+        let id = push_source(&mut inner, name, kind)?;
         self.bump(&mut inner);
         drop(inner);
         self.supervise();
@@ -380,24 +429,47 @@ impl Engine {
         if let Some(name) = &patch.name {
             check_len("name", name.trim(), MAX_NAME_CHARS)?;
         }
+        let processing_patch = patch.noise_suppression.is_some()
+            || patch.noise_gate.is_some()
+            || patch.gate_db.is_some();
         let mut inner = self.inner.lock().unwrap();
         let (channel, ctrl) = if id == MASTER {
+            if processing_patch {
+                bail!("noise suppression and the noise gate are only for microphones");
+            }
             (&mut inner.config.master, self.master.clone())
         } else {
-            let ctrl = inner
+            let rt = inner
                 .sources
                 .get(id)
-                .ok_or_else(|| anyhow!("no such source"))?
-                .ctrl
-                .clone();
+                .ok_or_else(|| anyhow!("no such source"))?;
+            let (ctrl, processing) = (rt.ctrl.clone(), rt.processing.clone());
             let src = inner
                 .config
                 .sources
                 .iter_mut()
                 .find(|s| s.id == id)
                 .ok_or_else(|| anyhow!("no such source"))?;
+            if processing_patch && !matches!(src.kind, SourceKind::Device { .. }) {
+                bail!("noise suppression and the noise gate are only for microphones");
+            }
             if let Some(name) = patch.name.filter(|n| !n.trim().is_empty()) {
                 src.name = name.trim().to_owned();
+            }
+            if let Some(on) = patch.noise_suppression {
+                src.processing.noise_suppression = on;
+                processing.set_suppress(on);
+            }
+            if let Some(on) = patch.noise_gate {
+                src.processing.noise_gate = on;
+                processing.set_gate(on);
+            }
+            if let Some(db) = patch.gate_db {
+                if !db.is_finite() {
+                    bail!("invalid gate level");
+                }
+                src.processing.gate_db = db.clamp(-60.0, 0.0);
+                processing.set_threshold_db(src.processing.gate_db);
             }
             (&mut src.channel, ctrl)
         };
@@ -468,7 +540,12 @@ impl Engine {
         for h in &hotkeys {
             check_len("hotkey", &h.keys, MAX_NAME_CHARS)?;
             crate::hotkeys::parse(&h.keys)?;
-            if h.target != MASTER && !inner.sources.contains_key(&h.target) {
+            let exists = match h.action {
+                HotkeyAction::PlaySound => inner.config.sounds.iter().any(|s| s.id == h.target),
+                HotkeyAction::StopSounds => true,
+                _ => h.target == MASTER || inner.sources.contains_key(&h.target),
+            };
+            if !exists {
                 bail!("hotkey target {} does not exist", h.target);
             }
         }
@@ -478,11 +555,187 @@ impl Engine {
                 if h.id.is_empty() {
                     h.id = new_id("h");
                 }
+                if h.action == HotkeyAction::StopSounds {
+                    h.target.clear();
+                }
                 h
             })
             .collect();
         self.bump(&mut inner);
         Ok(())
+    }
+
+    // -- soundboard ---------------------------------------------------------
+
+    /// Decodes the saved sounds in the background, so a large library
+    /// doesn't delay startup.
+    fn load_sounds(self: &Arc<Self>) {
+        let sounds = self.inner.lock().unwrap().config.sounds.clone();
+        if sounds.is_empty() {
+            return;
+        }
+        let weak = Arc::downgrade(self);
+        std::thread::Builder::new()
+            .name("load sounds".into())
+            .spawn(move || {
+                for sound in sounds {
+                    let path = soundboard::sounds_dir().join(&sound.file);
+                    let ext = soundboard::extension(&sound.file);
+                    let result = std::fs::read(&path)
+                        .with_context(|| format!("reading {}", path.display()))
+                        .and_then(|bytes| soundboard::decode(bytes, Some(&ext)));
+                    let Some(engine) = weak.upgrade() else { return };
+                    let mut inner = engine.inner.lock().unwrap();
+                    // It may have been removed or changed while loading.
+                    let Some(current) = inner.config.sounds.iter().find(|s| s.id == sound.id)
+                    else {
+                        continue;
+                    };
+                    match result {
+                        Ok(samples) => {
+                            engine
+                                .player
+                                .insert(&sound.id, samples, db_to_gain(current.gain_db));
+                        }
+                        Err(e) => {
+                            tracing::warn!("sound {:?}: {e:#}", sound.name);
+                            inner
+                                .sound_errors
+                                .insert(sound.id.clone(), format!("{e:#}"));
+                        }
+                    }
+                    drop(inner);
+                    engine.changed.send_modify(|v| *v += 1);
+                }
+            })
+            .expect("spawn sound loader");
+    }
+
+    /// Adds an uploaded audio file to the soundboard, and the soundboard to
+    /// the mix if it isn't there. Decoding can take a moment, so call it off
+    /// the async executor.
+    pub fn add_sound(
+        &self,
+        name: Option<String>,
+        filename: &str,
+        bytes: Vec<u8>,
+    ) -> anyhow::Result<String> {
+        if bytes.len() > MAX_FILE_BYTES {
+            bail!("the file is too big (max {} MB)", MAX_FILE_BYTES >> 20);
+        }
+        let name = match name.filter(|n| !n.trim().is_empty()) {
+            Some(n) => n.trim().to_owned(),
+            None => {
+                let stem = std::path::Path::new(filename)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("Sound");
+                stem.chars().take(MAX_NAME_CHARS).collect()
+            }
+        };
+        check_len("name", &name, MAX_NAME_CHARS)?;
+        if self.inner.lock().unwrap().config.sounds.len() >= MAX_SOUNDS {
+            bail!("too many sounds (max {MAX_SOUNDS})");
+        }
+        let ext = soundboard::extension(filename);
+        let samples = soundboard::decode(bytes.clone(), Some(&ext))?;
+        let id = new_id("snd");
+        let file = format!("{id}.{ext}");
+        let path = soundboard::sounds_dir().join(&file);
+        std::fs::create_dir_all(soundboard::sounds_dir())
+            .and_then(|()| std::fs::write(&path, &bytes))
+            .with_context(|| format!("saving {}", path.display()))?;
+
+        let mut inner = self.inner.lock().unwrap();
+        if inner.config.sounds.len() >= MAX_SOUNDS {
+            drop(inner);
+            let _ = std::fs::remove_file(&path);
+            bail!("too many sounds (max {MAX_SOUNDS})");
+        }
+        self.player.insert(&id, samples, 1.0);
+        inner.config.sounds.push(SoundConfig {
+            id: id.clone(),
+            name,
+            file,
+            gain_db: 0.0,
+        });
+        let add_board = !inner
+            .config
+            .sources
+            .iter()
+            .any(|s| s.kind == SourceKind::Soundboard);
+        if add_board {
+            push_source(&mut inner, None, SourceKind::Soundboard)?;
+        }
+        self.bump(&mut inner);
+        drop(inner);
+        if add_board {
+            self.supervise();
+        }
+        Ok(id)
+    }
+
+    pub fn update_sound(&self, id: &str, patch: SoundPatch) -> anyhow::Result<()> {
+        if let Some(name) = &patch.name {
+            check_len("name", name.trim(), MAX_NAME_CHARS)?;
+        }
+        let mut inner = self.inner.lock().unwrap();
+        let sound = inner
+            .config
+            .sounds
+            .iter_mut()
+            .find(|s| s.id == id)
+            .ok_or_else(|| anyhow!("no such sound"))?;
+        if let Some(name) = patch.name.filter(|n| !n.trim().is_empty()) {
+            sound.name = name.trim().to_owned();
+        }
+        if let Some(db) = patch.gain_db {
+            sound.gain_db = db.clamp(-60.0, 12.0);
+            self.player.set_gain(id, db_to_gain(sound.gain_db));
+        }
+        self.bump(&mut inner);
+        Ok(())
+    }
+
+    pub fn remove_sound(&self, id: &str) -> anyhow::Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        let index = inner
+            .config
+            .sounds
+            .iter()
+            .position(|s| s.id == id)
+            .ok_or_else(|| anyhow!("no such sound"))?;
+        let sound = inner.config.sounds.remove(index);
+        inner.sound_errors.remove(id);
+        inner.config.hotkeys.retain(|h| h.target != id);
+        self.player.remove(id);
+        self.bump(&mut inner);
+        drop(inner);
+        let path = soundboard::sounds_dir().join(&sound.file);
+        if let Err(e) = std::fs::remove_file(&path)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!("deleting {}: {e}", path.display());
+        }
+        Ok(())
+    }
+
+    pub fn play_sound(&self, id: &str) -> anyhow::Result<()> {
+        let inner = self.inner.lock().unwrap();
+        if !inner.config.sounds.iter().any(|s| s.id == id) {
+            bail!("no such sound");
+        }
+        if !self.player.play(id) {
+            match inner.sound_errors.get(id) {
+                Some(e) => bail!("the sound couldn't be loaded: {e}"),
+                None => bail!("the sound is still loading"),
+            }
+        }
+        Ok(())
+    }
+
+    pub fn stop_sounds(&self) {
+        self.player.stop_all();
     }
 
     // -- threads ------------------------------------------------------------
@@ -763,13 +1016,20 @@ impl Engine {
                         rt.retry_at = now + RETRY_DELAY;
                         continue;
                     }
-                    CaptureTarget::Device(id)
+                    Capture::Backend {
+                        target: CaptureTarget::Device(id),
+                        processing: Some(rt.processing.clone()),
+                    }
                 }
+                SourceKind::Soundboard => Capture::Soundboard(self.player.clone()),
                 SourceKind::App { exe } => match found.get(exe).copied().flatten() {
                     Some(pid) => {
                         tracing::info!("source {:?}: found {exe} as PID {pid}", src.name);
                         rt.pid = Some(pid);
-                        CaptureTarget::Process(pid)
+                        Capture::Backend {
+                            target: CaptureTarget::Process(pid),
+                            processing: None,
+                        }
                     }
                     None => {
                         // Not looked up this tick (it became idle meanwhile)
@@ -828,12 +1088,64 @@ impl Engine {
     }
 }
 
+/// Validates and adds a source to the config (the caller bumps and
+/// supervises).
+fn push_source(
+    inner: &mut Inner,
+    name: Option<String>,
+    kind: SourceKind,
+) -> anyhow::Result<String> {
+    let name = match (name.filter(|n| !n.trim().is_empty()), &kind) {
+        (Some(n), _) => n.trim().to_owned(),
+        (None, SourceKind::Device { device: Some(d) }) => d.name.clone(),
+        (None, SourceKind::Device { device: None }) => "Default microphone".into(),
+        (None, SourceKind::App { exe }) => display_exe(exe),
+        (None, SourceKind::Soundboard) => "Soundboard".into(),
+    };
+    if let SourceKind::App { exe } = &kind {
+        if exe.trim().is_empty() {
+            bail!("executable name is required");
+        }
+        check_len("executable name", exe, 260)?;
+    }
+    check_len("name", &name, MAX_NAME_CHARS)?;
+    if inner.config.sources.len() >= MAX_SOURCES {
+        bail!("too many sources (max {MAX_SOURCES})");
+    }
+    if kind == SourceKind::Soundboard
+        && inner
+            .config
+            .sources
+            .iter()
+            .any(|s| s.kind == SourceKind::Soundboard)
+    {
+        bail!("the soundboard is already in the mix");
+    }
+    let id = new_id("s");
+    let cfg = SourceConfig {
+        id: id.clone(),
+        name,
+        kind,
+        channel: Channel::default(),
+        processing: Processing::default(),
+    };
+    inner.sources.insert(id.clone(), SourceRuntime::new(&cfg));
+    inner.config.sources.push(cfg);
+    Ok(id)
+}
+
 impl SourceRuntime {
-    fn new(channel: &Channel) -> Self {
+    fn new(src: &SourceConfig) -> Self {
+        let (channel, p) = (&src.channel, &src.processing);
         Self {
             ctrl: Arc::new(ChannelControl::new(
                 db_to_gain(channel.gain_db),
                 channel.muted,
+            )),
+            processing: Arc::new(ProcessingControl::new(
+                p.noise_suppression,
+                p.noise_gate,
+                p.gate_db,
             )),
             status: Arc::new(Mutex::new(Status::new("waiting", "Starting…"))),
             capture: None,
@@ -867,9 +1179,29 @@ fn display_exe(exe: &str) -> String {
     }
 }
 
+/// What a source's capture thread records.
+enum Capture {
+    /// A device or app, through the backend. Devices get microphone
+    /// processing.
+    Backend {
+        target: CaptureTarget,
+        processing: Option<Arc<ProcessingControl>>,
+    },
+    Soundboard(Arc<Player>),
+}
+
+impl std::fmt::Debug for Capture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Capture::Backend { target, .. } => target.fmt(f),
+            Capture::Soundboard(_) => f.write_str("Soundboard"),
+        }
+    }
+}
+
 fn capture_thread(
     backend: &dyn Backend,
-    target: CaptureTarget,
+    capture: Capture,
     mut tx: rtrb::Producer<f32>,
     status: &SharedStatus,
     stop: &AtomicBool,
@@ -884,20 +1216,35 @@ fn capture_thread(
         }
     };
     backend.promote_audio_thread();
-    tracing::info!("opening capture {target:?}");
-    let mut stream = match backend.open_capture(&target) {
+    let target = format!("{capture:?}");
+    tracing::info!("opening capture {target}");
+    let (opened, mut processor) = match capture {
+        Capture::Backend { target, processing } => (
+            backend.open_capture(&target),
+            processing.map(Processor::new),
+        ),
+        Capture::Soundboard(player) => (
+            Ok(Box::new(soundboard::Stream::new(player)) as Box<dyn CaptureStream>),
+            None,
+        ),
+    };
+    let mut stream = match opened {
         Ok(s) => s,
         Err(e) => {
-            tracing::warn!("capture {target:?} failed: {e:#}");
+            tracing::warn!("capture {target} failed: {e:#}");
             report("error", format!("{e:#}"));
             return;
         }
     };
-    tracing::info!("capturing {target:?} ({})", stream.describe());
+    tracing::info!("capturing {target} ({})", stream.describe());
     report("running", stream.describe());
     while !stop.load(Ordering::Relaxed) {
-        if let Err(e) = stream.read(&mut |data| push_frames(&mut tx, data)) {
-            tracing::warn!("capture {target:?} stopped: {e:#}");
+        let result = stream.read(&mut |data| match &mut processor {
+            Some(p) => p.process(data, &mut |out| push_frames(&mut tx, out)),
+            None => push_frames(&mut tx, data),
+        });
+        if let Err(e) = result {
+            tracing::warn!("capture {target} stopped: {e:#}");
             report("error", format!("{e:#}"));
             return;
         }
@@ -1073,6 +1420,7 @@ mod tests {
                     exe: format!("{id}.exe"),
                 },
                 channel: Channel::default(),
+                processing: Processing::default(),
             })
             .to_vec();
         let config = Config {
@@ -1163,6 +1511,157 @@ mod tests {
             name: "cable".into(),
         }));
         assert_eq!(wait_monitor(&engine, "running").state, "running");
+        engine.shutdown();
+    }
+
+    /// A short 16-bit mono WAV file.
+    fn wav() -> Vec<u8> {
+        let samples = vec![1000i16; 4_800];
+        let data_len = (samples.len() * 2) as u32;
+        let mut f = Vec::new();
+        f.extend(b"RIFF");
+        f.extend((36 + data_len).to_le_bytes());
+        f.extend(b"WAVEfmt ");
+        for v in [16u32, 1 | (1 << 16), 48_000, 96_000, 2 | (16 << 16)] {
+            f.extend(v.to_le_bytes());
+        }
+        f.extend(b"data");
+        f.extend(data_len.to_le_bytes());
+        f.extend(samples.iter().flat_map(|s| s.to_le_bytes()));
+        f
+    }
+
+    fn hotkey(action: HotkeyAction, target: &str) -> Hotkey {
+        Hotkey {
+            id: String::new(),
+            keys: "F1".into(),
+            action,
+            target: target.into(),
+        }
+    }
+
+    fn soundboards(engine: &Engine) -> Vec<SourceView> {
+        engine
+            .state()
+            .sources
+            .into_iter()
+            .filter(|s| s.kind == SourceKind::Soundboard)
+            .collect()
+    }
+
+    #[test]
+    fn sounds_bring_the_soundboard_play_and_clean_up() {
+        let engine = engine("cable");
+        let id = engine.add_sound(None, "Air Horn.wav", wav()).unwrap();
+        let sound = &engine.state().sounds[0];
+        assert_eq!((sound.name.as_str(), sound.state), ("Air Horn", "ready"));
+        assert_eq!(
+            soundboards(&engine).len(),
+            1,
+            "first sound adds the soundboard"
+        );
+        let two = engine
+            .add_sound(Some("Two".into()), "two.wav", wav())
+            .unwrap();
+        assert!(engine.add_source(None, SourceKind::Soundboard).is_err());
+        assert_eq!(soundboards(&engine).len(), 1, "only ever one");
+
+        // The soundboard's capture runs without a backend.
+        let mut status = String::new();
+        for _ in 0..300 {
+            status = soundboards(&engine)[0].status.state.to_owned();
+            if status == "running" {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(status, "running");
+
+        engine.play_sound(&id).unwrap();
+        assert_eq!(engine.playing_sounds(), vec![id.clone()]);
+        engine.stop_sounds();
+        assert!(engine.playing_sounds().is_empty());
+
+        let err = engine
+            .add_sound(None, "x.mp3", b"junk".to_vec())
+            .unwrap_err();
+        assert!(err.to_string().contains("supported"), "{err}");
+        assert_eq!(
+            engine.state().sounds.len(),
+            2,
+            "a rejected file isn't added"
+        );
+
+        engine
+            .set_hotkeys(vec![
+                hotkey(HotkeyAction::PlaySound, &id),
+                hotkey(HotkeyAction::StopSounds, "anything"),
+                hotkey(HotkeyAction::PlaySound, &two),
+            ])
+            .unwrap();
+        assert_eq!(engine.hotkeys()[1].target, "", "stop needs no target");
+        assert!(
+            engine
+                .set_hotkeys(vec![hotkey(HotkeyAction::PlaySound, MASTER)])
+                .is_err()
+        );
+        assert!(
+            engine
+                .set_hotkeys(vec![hotkey(HotkeyAction::ToggleMute, &id)])
+                .is_err(),
+            "a sound isn't a channel"
+        );
+
+        let file = {
+            let inner = engine.inner.lock().unwrap();
+            soundboard::sounds_dir().join(&inner.config.sounds[0].file)
+        };
+        assert!(file.exists());
+        engine.remove_sound(&id).unwrap();
+        assert!(!file.exists(), "file deleted");
+        assert_eq!(engine.hotkeys().len(), 2, "its hotkey went with it");
+        assert!(engine.play_sound(&id).is_err());
+        engine.shutdown();
+    }
+
+    #[test]
+    fn processing_is_for_microphones_only() {
+        let engine = engine("cable");
+        let suppress = || ChannelPatch {
+            noise_suppression: Some(true),
+            ..Default::default()
+        };
+        assert!(
+            engine.update_channel("a", suppress()).is_err(),
+            "app source"
+        );
+        assert!(engine.update_channel(MASTER, suppress()).is_err());
+
+        let mic = engine
+            .add_source(None, SourceKind::Device { device: None })
+            .unwrap();
+        engine
+            .update_channel(
+                &mic,
+                ChannelPatch {
+                    noise_suppression: Some(true),
+                    noise_gate: Some(true),
+                    gate_db: Some(-200.0),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let src = engine
+            .state()
+            .sources
+            .into_iter()
+            .find(|s| s.id == mic)
+            .unwrap();
+        assert!(src.processing.noise_suppression && src.processing.noise_gate);
+        assert_eq!(src.processing.gate_db, -60.0, "clamped");
+        let meters = engine.meters();
+        assert!(meters[&mic].mic_level.is_some());
+        assert!(meters["a"].mic_level.is_none());
         engine.shutdown();
     }
 

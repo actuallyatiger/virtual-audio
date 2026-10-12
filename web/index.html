@@ -49,6 +49,19 @@
       <div id="strips" class="strips"></div>
     </section>
 
+    <section class="panel" id="soundboard" aria-labelledby="sb-h">
+      <div class="panel-head">
+        <h2 id="sb-h">Soundboard</h2>
+        <div class="panel-actions">
+          <button id="stop-sounds" class="ghost" disabled>■ Stop all</button>
+          <button id="add-sound" class="primary">+ Add sounds</button>
+          <input type="file" id="sound-files" accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a" multiple hidden>
+        </div>
+      </div>
+      <p class="hint" id="sb-hint"></p>
+      <div id="sounds" class="sounds"></div>
+    </section>
+
     <section class="panel" aria-labelledby="hk-h">
       <div class="panel-head">
         <h2 id="hk-h">Hotkeys</h2>
@@ -81,6 +94,19 @@
         <span class="gate" title="Silenced by a push-to-talk / push-to-mute hotkey">PTT</span>
       </div>
       <div class="status monitor-status" hidden></div>
+      <details class="processing" hidden>
+        <summary>Mic processing <span class="proc-summary"></span></summary>
+        <label class="check"><input type="checkbox" class="suppress"> Noise suppression</label>
+        <p class="hint small">Removes steady background noise (fans, hum, keyboard) from your voice.</p>
+        <label class="check"><input type="checkbox" class="gate-on"> Noise gate</label>
+        <div class="gate-controls" hidden>
+          <div class="meter mic-meter" aria-hidden="true"><div class="meter-fill"></div><div class="meter-mask"></div><div class="threshold-mark"></div></div>
+          <span class="gate-state"></span>
+          <input type="range" class="threshold" min="-60" max="0" step="1">
+          <span class="threshold-value"></span>
+          <p class="hint small">Silences the mic until it's louder than the line. Set the line just above the meter when you're quiet.</p>
+        </div>
+      </details>
     </article>
   </template>
 
@@ -106,6 +132,26 @@
       <div class="dialog-actions">
         <button type="button" id="add-cancel" class="ghost">Cancel</button>
         <button id="add-confirm" value="default" class="primary" disabled>Add</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="sound-dialog">
+    <form method="dialog" class="dialog-body">
+      <h2>Edit sound</h2>
+      <label class="field">Name
+        <input id="sound-name" maxlength="100" spellcheck="false">
+      </label>
+      <label class="field" for="sound-gain">Volume</label>
+      <div class="gain-row">
+        <input type="range" id="sound-gain" class="gain" min="-60" max="12" step="0.5">
+        <span id="sound-gain-value" class="gain-label"></span>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" id="sound-delete" class="ghost danger">Delete</button>
+        <span class="spacer"></span>
+        <button type="button" id="sound-preview" class="ghost">▶ Play</button>
+        <button id="sound-done" class="primary">Done</button>
       </div>
     </form>
   </dialog>

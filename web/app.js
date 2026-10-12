@@ -10,6 +10,7 @@ let recording = null; // { key, cancel, stop }
 let socket = null;
 let listening = false; // whether this page has Listen on
 let dragId = null; // source being dragged
+let playing = new Set(); // ids of the soundboard sounds playing now
 
 // ---------------------------------------------------------------- utilities
 
@@ -87,7 +88,10 @@ function connect() {
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.type === "state") render(msg.state);
-    else if (msg.type === "meters") updateMeters(msg.meters);
+    else if (msg.type === "meters") {
+      updateMeters(msg.meters);
+      updatePlaying(msg.playing || []);
+    }
   };
   ws.onclose = () => {
     conn.textContent = "disconnected";
@@ -107,6 +111,7 @@ function render(next) {
   renderOutput();
   renderStrips();
   renderListen();
+  renderSounds();
   renderHotkeys();
 }
 
@@ -174,8 +179,12 @@ function channelList() {
     status: null,
   }];
   for (const s of state.sources) {
-    const detail = s.kind === "app" ? s.exe : s.device ? s.device.name : "Default microphone (follows Windows)";
-    list.push({ ...s, detail, icon: s.kind === "app" ? "🗔" : "🎙" });
+    const [detail, icon] = {
+      app: [s.exe, "🗔"],
+      device: [s.device ? s.device.name : "Default microphone (follows Windows)", "🎙"],
+      soundboard: ["Sounds from the soundboard below", "🔊"],
+    }[s.kind];
+    list.push({ ...s, detail, icon });
   }
   return list;
 }
@@ -215,6 +224,7 @@ function createStrip(ch) {
   } else {
     setUpReorder(node, parts.handle, id);
   }
+  if (ch.kind === "device") setUpProcessing(node, parts, id);
 
   parts.gainValue.addEventListener("click", () => editGain(id, parts));
 
@@ -244,7 +254,43 @@ function createStrip(ch) {
   return { el: node, parts };
 }
 
-/** Swaps the dB label for a number field; Enter or blur applies, Esc cancels. */
+/** Wires up a microphone's noise suppression and noise gate controls. */
+function setUpProcessing(node, parts, id) {
+  const proc = $(".processing", node);
+  proc.hidden = false;
+  Object.assign(parts, {
+    proc,
+    procSummary: $(".proc-summary", node),
+    suppress: $(".suppress", node),
+    gateOn: $(".gate-on", node),
+    gateControls: $(".gate-controls", node),
+    micMask: $(".mic-meter .meter-mask", node),
+    thresholdMark: $(".threshold-mark", node),
+    threshold: $(".threshold", node),
+    thresholdValue: $(".threshold-value", node),
+    gateState: $(".gate-state", node),
+  });
+  const patch = (body) => attempt(api("PATCH", `/api/channels/${id}`, body));
+  parts.suppress.addEventListener("change", () => patch({ noise_suppression: parts.suppress.checked }));
+  parts.gateOn.addEventListener("change", () => {
+    parts.gateControls.hidden = !parts.gateOn.checked;
+    patch({ noise_gate: parts.gateOn.checked });
+  });
+  const sendThreshold = throttle((db) => patch({ gate_db: db }), 60);
+  parts.threshold.addEventListener("input", () => {
+    const db = Number(parts.threshold.value);
+    showThreshold(parts, db);
+    sendThreshold(db);
+  });
+}
+
+function showThreshold(parts, db) {
+  const text = `${db < 0 ? "−" : ""}${Math.abs(db)} dB`;
+  parts.thresholdValue.textContent = text;
+  parts.threshold.setAttribute("aria-valuetext", text);
+  parts.thresholdMark.style.left = `${((db + 60) / 60) * 100}%`;
+}
+
 /** Parses a typed gain: accepts "−6", "-6,5", "-6 dB". Returns null if invalid. */
 function parseDb(text) {
   const normalised = text.trim().replace(/\s*db$/i, "").replace("\u2212", "-").replace(",", ".");
@@ -418,6 +464,18 @@ function renderStrips() {
       p.gain.setAttribute("aria-valuetext", formatDb(ch.gain_db));
       p.gainValue.setAttribute("aria-label", `${ch.name} volume ${formatDb(ch.gain_db)}. Click to type a value`);
     }
+    if (p.proc) {
+      p.suppress.checked = ch.noise_suppression;
+      p.gateOn.checked = ch.noise_gate;
+      p.gateControls.hidden = !ch.noise_gate;
+      if (document.activeElement !== p.threshold) {
+        p.threshold.value = ch.gate_db;
+        showThreshold(p, ch.gate_db);
+      }
+      p.threshold.setAttribute("aria-label", `${ch.name} noise gate level`);
+      const on = [ch.noise_suppression && "noise suppression", ch.noise_gate && "gate"].filter(Boolean);
+      p.procSummary.textContent = `· ${on.length ? on.join(", ") : "off"}`;
+    }
     p.mute.setAttribute("aria-pressed", String(ch.muted));
     p.mute.textContent = ch.muted ? "Muted" : "Mute";
     strip.el.classList.toggle("is-muted", ch.muted);
@@ -439,14 +497,25 @@ function renderStrips() {
   }
 }
 
+/** Shows a linear peak on a meter scaled −60…0 dB. */
+function setMeter(mask, peak) {
+  const db = peak > 0 ? 20 * Math.log10(peak) : -Infinity;
+  const pct = Math.max(0, Math.min(1, (db + 60) / 60));
+  mask.style.width = `${(1 - pct) * 100}%`;
+}
+
 function updateMeters(meters) {
   for (const [id, m] of Object.entries(meters)) {
     const strip = strips.get(id);
     if (!strip) continue;
-    const db = m.peak > 0 ? 20 * Math.log10(m.peak) : -Infinity;
-    const pct = Math.max(0, Math.min(1, (db + 60) / 60));
-    strip.parts.mask.style.width = `${(1 - pct) * 100}%`;
+    setMeter(strip.parts.mask, m.peak);
     strip.el.classList.toggle("gated", !m.open);
+    const p = strip.parts;
+    if (p.micMask && m.mic_level !== undefined && !p.gateControls.hidden) {
+      setMeter(p.micMask, m.mic_level);
+      p.gateState.textContent = m.mic_gate_open ? "Open" : "Closed";
+      p.gateState.className = `gate-state ${m.mic_gate_open ? "open" : "closed"}`;
+    }
   }
 }
 
@@ -571,13 +640,206 @@ $("#add-confirm").addEventListener("click", async (e) => {
 });
 $("#add-source").addEventListener("click", openAddDialog);
 
+// ---------------------------------------------------------------- soundboard
+
+const MAX_SOUND_BYTES = 20 * 1024 * 1024;
+let uploading = null; // { done, total } while files are being added
+let editingSound = null; // id of the sound open in the edit dialog
+let lastSoundsRender = "";
+
+function renderSounds() {
+  if (!state) return;
+  const hint = $("#sb-hint");
+  const inMix = state.sources.some((s) => s.kind === "soundboard");
+  if (uploading) {
+    hint.textContent = `Adding sounds… ${uploading.done} of ${uploading.total} done`;
+  } else if (!state.sounds.length) {
+    hint.textContent = "Add MP3, WAV, OGG, FLAC or M4A files up to 60 seconds long, or drop them here. Then click a sound to play it into the mix.";
+  } else if (!inMix) {
+    const add = el("button", { type: "button", className: "link", textContent: "Add it back" });
+    add.addEventListener("click", () => attempt(api("POST", "/api/sources", { kind: "soundboard" })));
+    hint.replaceChildren("The soundboard isn't in the mix, so nobody hears it. ", add);
+  } else {
+    hint.textContent = "Click a sound to play it into the mix (again to restart it). Turn on 🎧 Listen on Master to hear it yourself.";
+  }
+
+  const signature = JSON.stringify(state.sounds);
+  if (signature !== lastSoundsRender) {
+    lastSoundsRender = signature;
+    const container = $("#sounds");
+    // Keep focus on the same tile's button across the rebuild.
+    const focused = document.activeElement;
+    const tile = focused && container.contains(focused) ? focused.closest(".sound") : null;
+    const refocus = tile && { id: tile.dataset.id, cls: focused.classList[0] };
+    container.replaceChildren(...state.sounds.map(soundTile));
+    if (refocus) {
+      const again = container.querySelector(`.sound[data-id="${CSS.escape(refocus.id)}"] .${refocus.cls}`);
+      if (again) again.focus();
+    }
+  }
+  updatePlaying([...playing]);
+
+  if (editingSound) {
+    const sound = state.sounds.find((s) => s.id === editingSound);
+    if (!sound) {
+      $("#sound-dialog").close();
+    } else {
+      $("#sound-preview").disabled = sound.state !== "ready";
+      if (document.activeElement !== $("#sound-gain")) showSoundGain(sound.gain_db);
+    }
+  }
+}
+
+function soundTile(sound) {
+  const ready = sound.state === "ready";
+  const play = el("button", {
+    type: "button",
+    className: "play",
+    disabled: !ready,
+    title: ready ? `Play ${sound.name}` : sound.state === "error" ? sound.message : "Loading…",
+  }, el("span", { className: "play-icon", "aria-hidden": "true", textContent: "▶" }), el("span", { className: "sound-name", textContent: sound.name }));
+  play.addEventListener("click", () => attempt(api("POST", `/api/sounds/${sound.id}/play`)));
+  const edit = el("button", { type: "button", className: "edit ghost icon", textContent: "⋯", title: "Edit or delete", "aria-label": `Edit ${sound.name}` });
+  edit.addEventListener("click", () => openSoundDialog(sound.id));
+  const tile = el("div", { className: `sound ${sound.state}`, "data-id": sound.id }, play, edit);
+  if (sound.state === "error") tile.append(el("span", { className: "sound-error", textContent: "Couldn't load this file", title: sound.message }));
+  else if (sound.state === "loading") tile.append(el("span", { className: "sound-error", textContent: "Loading…" }));
+  return tile;
+}
+
+function updatePlaying(ids) {
+  playing = new Set(ids);
+  for (const tile of document.querySelectorAll("#sounds .sound")) tile.classList.toggle("playing", playing.has(tile.dataset.id));
+  $("#stop-sounds").disabled = playing.size === 0;
+}
+
+async function addSounds(files) {
+  const list = [...files];
+  if (!list.length || uploading) return;
+  uploading = { done: 0, total: list.length };
+  renderSounds();
+  const failures = [];
+  for (const file of list) {
+    try {
+      if (file.size > MAX_SOUND_BYTES) throw new Error("the file is too big (max 20 MB)");
+      const res = await fetch(`/api/sounds?filename=${encodeURIComponent(file.name)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: file,
+      });
+      if (!res.ok) throw new Error((await res.text()) || `${res.status} ${res.statusText}`);
+    } catch (e) {
+      failures.push(`${file.name}: ${e.message}`);
+    }
+    uploading.done++;
+    renderSounds();
+  }
+  uploading = null;
+  renderSounds();
+  if (failures.length) toast(failures.join("\n"));
+}
+
+$("#add-sound").addEventListener("click", () => $("#sound-files").click());
+$("#sound-files").addEventListener("change", (e) => {
+  addSounds(e.target.files);
+  e.target.value = "";
+});
+$("#stop-sounds").addEventListener("click", () => attempt(api("POST", "/api/sounds/stop")));
+
+// Drop files on the soundboard to add them. Elsewhere, a dropped file would
+// make the browser navigate away from the mixer to open it.
+const board = $("#soundboard");
+const hasFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes("Files");
+board.addEventListener("dragover", (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "copy";
+  board.classList.add("drop-target");
+});
+board.addEventListener("dragleave", (e) => {
+  if (!board.contains(e.relatedTarget)) board.classList.remove("drop-target");
+});
+board.addEventListener("drop", (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  board.classList.remove("drop-target");
+  addSounds(e.dataTransfer.files);
+});
+for (const type of ["dragover", "drop"]) {
+  window.addEventListener(type, (e) => {
+    if (!hasFiles(e) || board.contains(e.target)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "none";
+  });
+}
+
+function showSoundGain(db) {
+  $("#sound-gain").value = db;
+  $("#sound-gain-value").textContent = formatDb(db);
+  $("#sound-gain").setAttribute("aria-valuetext", formatDb(db));
+}
+
+function openSoundDialog(id) {
+  const sound = state.sounds.find((s) => s.id === id);
+  if (!sound) return;
+  editingSound = id;
+  $("#sound-name").value = sound.name;
+  showSoundGain(sound.gain_db);
+  $("#sound-preview").disabled = sound.state !== "ready";
+  $("#sound-dialog").showModal();
+}
+
+function saveSoundName() {
+  const sound = state && state.sounds.find((s) => s.id === editingSound);
+  const name = $("#sound-name").value.trim();
+  if (sound && name && name !== sound.name) attempt(api("PATCH", `/api/sounds/${sound.id}`, { name }));
+}
+
+const sendSoundGain = throttle((id, db) => attempt(api("PATCH", `/api/sounds/${id}`, { gain_db: db })), 60);
+$("#sound-gain").addEventListener("input", () => {
+  const db = Number($("#sound-gain").value);
+  $("#sound-gain-value").textContent = formatDb(db);
+  $("#sound-gain").setAttribute("aria-valuetext", formatDb(db));
+  sendSoundGain(editingSound, db);
+});
+$("#sound-name").addEventListener("change", saveSoundName);
+$("#sound-preview").addEventListener("click", () => attempt(api("POST", `/api/sounds/${editingSound}/play`)));
+$("#sound-delete").addEventListener("click", () => {
+  const sound = state.sounds.find((s) => s.id === editingSound);
+  if (!sound || !confirm(`Delete “${sound.name}” from the soundboard?`)) return;
+  editingSound = null;
+  $("#sound-dialog").close();
+  attempt(api("DELETE", `/api/sounds/${sound.id}`));
+});
+$("#sound-dialog").addEventListener("close", () => {
+  saveSoundName();
+  editingSound = null;
+});
+
 // ---------------------------------------------------------------- hotkeys
 
 const ACTIONS = [
   ["toggle_mute", "Toggle mute"],
   ["push_to_talk", "Push to talk"],
   ["push_to_mute", "Push to mute"],
+  ["play_sound", "Play sound"],
+  ["stop_sounds", "Stop all sounds"],
 ];
+
+/** [value, label] choices for a hotkey's target, which depend on its action. */
+function targetsFor(action) {
+  if (action === "play_sound") return state.sounds.map((s) => [s.id, s.name]);
+  if (action === "stop_sounds") return [["", "All sounds"]];
+  return [["master", "Master"], ...state.sources.map((s) => [s.id, s.name])];
+}
+
+/** Keeps `current` if it suits `action`, otherwise picks a sensible target. */
+function targetFor(action, current) {
+  const targets = targetsFor(action);
+  if (targets.some(([v]) => v === current)) return current;
+  if (action === "play_sound" || action === "stop_sounds") return targets.length ? targets[0][0] : "";
+  return state.sources[0] ? state.sources[0].id : "master";
+}
 
 const CODE_NAMES = {
   Space: "Space", Enter: "Enter", Tab: "Tab", Backspace: "Backspace", Insert: "Insert", Delete: "Delete",
@@ -711,24 +973,28 @@ function cancelRecording() {
 let lastHotkeyRender = "";
 function renderHotkeys(force = false) {
   if (!state || (recording && !force)) return;
-  const targets = [["master", "Master"], ...state.sources.map((s) => [s.id, s.name])];
-  const targetName = new Map(targets);
-  // Drafts pointing at a source that has since been removed fall back to Master.
-  for (const d of hotkeyDrafts) if (!targetName.has(d.target)) d.target = "master";
-  const signature = JSON.stringify([hotkeyRows(), targets]);
+  // Drafts pointing at a source or sound that has since been removed move to
+  // another target.
+  for (const d of hotkeyDrafts) {
+    if (d.action === "play_sound" && !state.sounds.length) d.action = "toggle_mute";
+    d.target = targetFor(d.action, d.target);
+  }
+  const names = [state.sources.map((s) => [s.id, s.name]), state.sounds.map((s) => [s.id, s.name])];
+  const signature = JSON.stringify([hotkeyRows(), names]);
   if (!force && signature === lastHotkeyRender) return;
   lastHotkeyRender = signature;
 
   const container = $("#hotkeys");
   const rows = hotkeyRows();
   if (!rows.length) {
-    container.replaceChildren(el("p", { className: "empty", textContent: "No hotkeys yet. Add one to mute or push-to-talk any channel." }));
+    container.replaceChildren(el("p", { className: "empty", textContent: "No hotkeys yet. Add one to mute or push-to-talk any channel, or to play a sound." }));
     return;
   }
   let focusTarget = null;
   container.replaceChildren(...rows.map((row, i) => {
     const key = rowKey(row);
-    const where = targetName.get(row.target) || "Master";
+    const targets = targetsFor(row.action);
+    const where = (targets.find(([v]) => v === row.target) || targets[0] || ["", "nothing"])[1];
     const keys = el("button", {
       className: "keys",
       textContent: row.keys || "Click to record",
@@ -738,11 +1004,16 @@ function renderHotkeys(force = false) {
     keys.addEventListener("click", () => startRecording(key, keys));
     if (pendingFocus && (pendingFocus === key || pendingFocus === row.keys)) focusTarget = keys;
 
-    const action = el("select", { "aria-label": `Hotkey ${i + 1} action (${where})` }, ...ACTIONS.map(([v, t]) => el("option", { value: v, textContent: t })));
+    const action = el("select", { "aria-label": `Hotkey ${i + 1} action (${where})` }, ...ACTIONS.map(([v, t]) =>
+      // There's nothing to play until a sound is added.
+      el("option", { value: v, textContent: t, disabled: v === "play_sound" && !state.sounds.length && row.action !== v })));
     action.value = row.action;
-    action.addEventListener("change", () => updateRow(key, { action: action.value }));
+    action.addEventListener("change", () => updateRow(key, { action: action.value, target: targetFor(action.value, row.target) }));
 
-    const target = el("select", { "aria-label": `Hotkey ${i + 1} channel` }, ...targets.map(([v, t]) => el("option", { value: v, textContent: t })));
+    const target = el("select", {
+      "aria-label": `Hotkey ${i + 1} ${row.action === "play_sound" ? "sound" : "channel"}`,
+      disabled: row.action === "stop_sounds",
+    }, ...targets.map(([v, t]) => el("option", { value: v, textContent: t })));
     target.value = row.target;
     target.addEventListener("change", () => updateRow(key, { target: target.value }));
 

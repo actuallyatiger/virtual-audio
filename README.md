@@ -1,13 +1,13 @@
 # Virtual Audio Mixer
 
-Mix your real microphone with audio from other apps (Chrome, a soundboard, a
-music player, …) and send the result to a virtual microphone. Discord, OBS,
-Teams or any other app then hears all of it through that one mic.
+Mix your real microphone with audio from other apps (Chrome, a music player,
+…) and a built-in soundboard, and send the result to a virtual microphone.
+Discord, OBS, Teams or any other app then hears all of it through that one mic.
 
 ```
  Microphone ─┐
  chrome.exe ─┼─► mixer (volume, mute, push-to-talk) ─► CABLE Input ══► CABLE Output ─► Discord
- Soundpad   ─┘                                        (virtual cable)    (virtual mic)
+ Soundboard ─┘                                        (virtual cable)    (virtual mic)
 ```
 
 It runs as a small tray app and is controlled from a web page served on
@@ -22,6 +22,21 @@ It runs as a small tray app and is controlled from a web page served on
 - **Any input device** as a source, or "default microphone", which follows the
   Windows default live. Sources that would capture the recording end of the
   output cable (a feedback loop) are refused with an error.
+- **Mic processing** for input devices, under each mic's **Mic processing**:
+  - *Noise suppression* (RNNoise) removes steady background noise such as
+    fans, hum and keyboard clatter. With it on, you can turn off Discord's own
+    noise suppression, which tends to cut out the soundboard and music.
+  - A *noise gate* silences the mic until it's louder than a threshold you set
+    against a live level meter. It stays open for 200 ms after you stop
+    talking, so word endings aren't clipped.
+
+  Either one adds up to 10 ms of delay and makes the mic mono.
+- **Soundboard**: add MP3, WAV, OGG, FLAC or M4A files (up to 60 seconds and
+  20 MB each, 64 sounds) with **+ Add sounds** or by dropping them on the
+  soundboard. Click a sound to play it into the mix; clicking it again
+  restarts it. Each sound has its own volume, and the soundboard is a mixer
+  channel with its own volume, mute and hotkeys. Turn on **Listen** to hear
+  it yourself.
 - Volume (−60 to +12 dB, drag the slider or click the value to type one),
   mute and a live level meter for every source and the master output. A soft
   limiter on the master stops the summed mix from clipping harshly. Drag
@@ -32,7 +47,8 @@ It runs as a small tray app and is controlled from a web page served on
   follows changes of the default output, and is refused (with a message) if
   the default output is the device the mix already goes to. Expect about
   100 ms of delay on your own voice.
-- **Global hotkeys**: toggle mute, push-to-talk or push-to-mute on any channel.
+- **Global hotkeys**: toggle mute, push-to-talk or push-to-mute on any
+  channel, play a sound, or stop all sounds.
   Keyboard combos and mouse side buttons (Mouse4/Mouse5) both work. Hotkeys
   don't swallow the key, so it still reaches the game you're in.
 - Start with Windows (runs in the background, tray icon only).
@@ -71,7 +87,8 @@ into Explorer's address bar, or use the tray's **Open log file**):
 
 | File | What it is |
 | --- | --- |
-| `config.json` | Your sources, output, hotkeys and volumes. |
+| `config.json` | Your sources, output, hotkeys, sounds and volumes. |
+| `sounds\` | Copies of the files you added to the soundboard. |
 | `config.<timestamp>.json.bad` | A `config.json` that could not be read. It is moved aside and the app starts with defaults, so you can repair it. If it can't be moved aside, the app doesn't start rather than overwrite it. |
 | `log.txt` | This run's log: every source and output it opens, errors, and crashes. |
 | `log.previous.txt` | The previous run's log. If the app vanished, look here. |
@@ -116,6 +133,8 @@ cargo build --target x86_64-pc-windows-gnu
 | Piece | Where |
 | --- | --- |
 | Mixing core: per-source SPSC ring buffers, gain ramps, meters, soft limiter | `src/mixer.rs` |
+| Mic processing: RNNoise noise suppression and noise gate | `src/dsp.rs` |
+| Soundboard: file decoding (Symphonia), resampling to 48 kHz, playback | `src/soundboard.rs` |
 | Engine: config, capture/render/monitor threads, supervisor that restarts captures, output and Listen as apps/devices come and go | `src/engine.rs` |
 | WASAPI backend: shared-mode event-driven streams, process loopback, device and session enumeration | `src/backend/wasapi.rs` |
 | Demo backend for non-Windows hosts | `src/backend/dummy.rs` |
@@ -124,7 +143,8 @@ cargo build --target x86_64-pc-windows-gnu
 | Tray icon, autostart, browser launch | `src/tray.rs`, `src/platform.rs` |
 
 All audio runs at 48 kHz stereo float. Windows converts each device's native
-format (`AUTOCONVERTPCM`). Each source keeps about 30 ms of buffer, so total
+format (`AUTOCONVERTPCM`); sounds are decoded and resampled to 48 kHz when
+they're added (and again at each start, in the background). Each source keeps about 30 ms of buffer, so total
 added latency is roughly 40–60 ms. Sources and the output run on separate
 clocks, so the mixer corrects drift continuously: when a source's buffer
 strays from its target it takes one frame more or less per 10 ms block and
@@ -142,13 +162,18 @@ executable with `include_str!`, so the release is a single `.exe`.
 | GET | `/api/apps` | |
 | POST | `/api/sources` | `{"kind":"app","exe":"chrome.exe"}` or `{"kind":"device","device":null}`, plus an optional `"name"` |
 | PUT | `/api/sources/order` | `{"ids":["…","…"]}` (every source id, in the new order) |
-| PATCH | `/api/channels/{id or "master"}` | `{"gain_db":-6,"muted":true,"name":"…"}` (`name` applies to sources only) |
+| PATCH | `/api/channels/{id or "master"}` | `{"gain_db":-6,"muted":true,"name":"…"}` (`name` applies to sources only). Input devices also take `noise_suppression`, `noise_gate` (booleans) and `gate_db` (−60 to 0). |
 | DELETE | `/api/channels/{id}` | |
 | PUT | `/api/output` | `{"device":{"id":"…","name":"…"}}` or `{"device":null}` |
-| PUT | `/api/hotkeys` | `[{"keys":"Ctrl+Shift+M","action":"push_to_talk","target":"…"}]` |
+| POST | `/api/sounds?filename=horn.mp3&name=…` | The raw file. Adds the soundboard to the mix if it isn't there. |
+| PATCH | `/api/sounds/{id}` | `{"name":"…","gain_db":-6}` |
+| DELETE | `/api/sounds/{id}` | |
+| POST | `/api/sounds/{id}/play` | Plays (or restarts) a sound. |
+| POST | `/api/sounds/stop` | Stops all sounds. |
+| PUT | `/api/hotkeys` | `[{"keys":"Ctrl+Shift+M","action":"push_to_talk","target":"…"}]`. Actions: `toggle_mute`, `push_to_talk`, `push_to_mute` (target: `master` or a source id), `play_sound` (target: a sound id), `stop_sounds`. |
 | PUT | `/api/settings` | `{"autostart":true}` |
 | POST | `/api/quit` | Stops the app. |
-| GET | `/ws` | WebSocket: pushes `state` on change (including `monitor`, Listen's `{state, message}`) and `meters` about 30 times a second. Send `{"type":"listen","on":true}` to monitor the mix; it plays while any connection has it on, and a connection's request ends when it closes. |
+| GET | `/ws` | WebSocket: pushes `state` on change (including `monitor`, Listen's `{state, message}`) and `meters` about 30 times a second (with `playing`, the sounds playing now). Send `{"type":"listen","on":true}` to monitor the mix; it plays while any connection has it on, and a connection's request ends when it closes. |
 
 Requests whose `Host` or `Origin` isn't `127.0.0.1`/`localhost` on our port are
 rejected, and the UI can't be embedded in another site's frame. This stops
@@ -162,7 +187,6 @@ each.
   Mixer Mic" and no third-party cable is needed. The output is just a device
   setting, so this slots in without engine changes. It needs Microsoft driver
   signing (or test-signing mode) to install.
-- Built-in soundboard (play files from the UI or hotkeys).
 
 ## License
 

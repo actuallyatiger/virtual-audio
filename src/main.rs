@@ -3,11 +3,13 @@
 
 mod backend;
 mod config;
+mod dsp;
 mod engine;
 mod hotkeys;
 mod mixer;
 mod platform;
 mod server;
+mod soundboard;
 #[cfg(windows)]
 mod tray;
 
@@ -131,6 +133,7 @@ fn apply_first_run_defaults(config: &mut Config, backend: &dyn backend::Backend)
             name: "Microphone".into(),
             kind: SourceKind::Device { device: None },
             channel: Channel::default(),
+            processing: Default::default(),
         });
     }
     if config.output.is_none()
@@ -155,14 +158,19 @@ pub fn log_path() -> std::path::PathBuf {
 /// panics) goes to `%APPDATA%\VirtualAudioMixer\log.txt`. `--verbose`
 /// adds debug detail.
 fn init_logging(verbose: bool) {
-    use tracing_subscriber::filter::LevelFilter;
-    let filter = if verbose {
+    use tracing_subscriber::filter::{LevelFilter, Targets};
+    use tracing_subscriber::prelude::*;
+    let level = if verbose {
         LevelFilter::DEBUG
     } else {
         LevelFilter::INFO
     };
-    let builder = tracing_subscriber::fmt()
-        .with_max_level(filter)
+    // The audio decoder logs its own errors for files it can't read; we
+    // report those ourselves, more readably.
+    let filter = Targets::new()
+        .with_default(level)
+        .with_target("symphonia", LevelFilter::OFF);
+    let layer = tracing_subscriber::fmt::layer()
         .with_thread_names(true)
         .with_target(false);
     let file = cfg!(all(windows, not(debug_assertions)))
@@ -174,12 +182,16 @@ fn init_logging(verbose: bool) {
             std::fs::File::create(log_path()).ok()
         })
         .flatten();
+    let registry = tracing_subscriber::registry().with(filter);
     match file {
-        Some(file) => builder
-            .with_ansi(false)
-            .with_writer(std::sync::Mutex::new(file))
+        Some(file) => registry
+            .with(
+                layer
+                    .with_ansi(false)
+                    .with_writer(std::sync::Mutex::new(file)),
+            )
             .init(),
-        None => builder.init(),
+        None => registry.with(layer).init(),
     }
 
     let default_hook = std::panic::take_hook();
