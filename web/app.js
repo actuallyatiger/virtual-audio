@@ -447,12 +447,16 @@ function updateRow(key, changes) {
 }
 
 function saveHotkeys(rows) {
-  const previousDrafts = hotkeyDrafts;
-  const complete = rows.filter((h) => h.keys).map(({ _draft, ...h }) => h);
+  const previous = { saved: state.hotkeys, drafts: hotkeyDrafts };
+  // Update the local list right away so a second quick edit builds on this
+  // one instead of on the list from before the server's broadcast arrives.
+  state.hotkeys = rows.filter((h) => h.keys);
   hotkeyDrafts = rows.filter((h) => !h.keys);
-  api("PUT", "/api/hotkeys", complete).catch((e) => {
-    // Keep unsaved drafts and show the server's real list again.
-    hotkeyDrafts = previousDrafts;
+  const body = state.hotkeys.map(({ _draft, ...h }) => h);
+  api("PUT", "/api/hotkeys", body).catch((e) => {
+    // Restore what the server still has, keeping unsaved drafts.
+    state.hotkeys = previous.saved;
+    hotkeyDrafts = previous.drafts;
     renderHotkeys(true);
     toast(e.message);
   });
