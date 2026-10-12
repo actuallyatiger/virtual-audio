@@ -105,6 +105,53 @@
       <div id="sounds" class="sounds"></div>
     </section>
 
+    <section class="panel" id="music" aria-labelledby="mu-h">
+      <div class="panel-head">
+        <div class="panel-title"><h2 id="mu-h">Music</h2><button type="button" class="info" data-icon="info" aria-expanded="false" aria-controls="mu-info" aria-label="About music" title="About music"></button></div>
+        <div class="panel-actions">
+          <button id="hear-music" class="ghost listen with-icon" aria-pressed="false"
+            title="Also play the music on your Windows default output (use headphones)"><span data-icon="headphones" aria-hidden="true"></span>Hear music</button>
+          <button id="music-add" class="primary with-icon"><span data-icon="plus" aria-hidden="true"></span>Add music</button>
+        </div>
+      </div>
+      <div class="info-pop" id="mu-info" hidden>
+        <ul>
+          <li>Plays audio files and whole folders into the mix, one track after another. Files stay where they are.</li>
+          <li><b>Add music</b> takes a folder or file path, or opens the Windows file picker.</li>
+          <li>Shuffle and repeat are next to the play button. Click a track in the list to play it.</li>
+          <li><b>Turn the music down while I talk</b> lowers it whenever your mic hears you.</li>
+          <li><b>Hear music</b> plays it on your Windows default output too, at <b>Your volume</b>.</li>
+        </ul>
+        <button type="button" class="link" data-help="help-music">More in Help</button>
+      </div>
+      <div class="hear-row" id="hear-music-row" hidden>
+        <label for="hear-music-gain">Your volume</label>
+        <input type="range" id="hear-music-gain" class="gain" min="-60" max="12" step="0.5">
+        <span id="hear-music-value" class="gain-label"></span>
+      </div>
+      <p class="hint" id="music-hint"></p>
+      <div class="player" id="player" hidden>
+        <div class="now-playing">
+          <span class="now-title" id="now-title"></span>
+          <span class="now-artist" id="now-artist"></span>
+        </div>
+        <div class="transport">
+          <button type="button" class="ghost icon" data-icon="shuffle" id="music-shuffle" aria-pressed="false" aria-label="Shuffle" title="Shuffle"></button>
+          <button type="button" class="ghost icon" data-icon="previous" id="music-prev" aria-label="Previous track" title="Previous (or back to the start)"></button>
+          <button type="button" class="primary icon round" data-icon="play" id="music-toggle" aria-label="Play"></button>
+          <button type="button" class="ghost icon" data-icon="next" id="music-next" aria-label="Next track" title="Next"></button>
+          <button type="button" class="ghost icon" data-icon="repeat" id="music-repeat" aria-label="Repeat: off" title="Repeat"></button>
+        </div>
+        <div class="seek">
+          <span id="music-pos">0:00</span>
+          <input type="range" id="music-seek" class="gain" min="0" max="1" step="1" aria-label="Position in track" disabled>
+          <span id="music-dur">0:00</span>
+        </div>
+        <label class="check"><input type="checkbox" id="music-duck"> Turn the music down while I talk</label>
+      </div>
+      <ol class="tracks" id="tracks"></ol>
+    </section>
+
     <section class="panel" aria-labelledby="hk-h">
       <div class="panel-head">
         <div class="panel-title"><h2 id="hk-h">Hotkeys</h2><button type="button" class="info" data-icon="info" aria-expanded="false" aria-controls="hk-info" aria-label="About hotkeys" title="About hotkeys"></button></div>
@@ -243,6 +290,27 @@
     </form>
   </dialog>
 
+  <dialog id="music-dialog" aria-labelledby="music-dialog-h">
+    <form class="dialog-body" id="music-form">
+      <h2 id="music-dialog-h">Music files and folders</h2>
+      <ul class="music-items" id="music-items"></ul>
+      <label class="field" for="music-path">Add a folder or file by its path</label>
+      <div class="add-path">
+        <input id="music-path" placeholder="e.g. C:\Users\you\Music" spellcheck="false" autocomplete="off">
+        <button type="submit" class="primary">Add</button>
+      </div>
+      <div class="browse" id="music-browse">
+        <span class="field-label">Or browse:</span>
+        <button type="button" class="ghost" id="browse-folders">Folders…</button>
+        <button type="button" class="ghost" id="browse-files">Files…</button>
+      </div>
+      <p class="error" id="music-error" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="primary" id="music-done">Done</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="setup-dialog" aria-labelledby="setup-h">
     <div class="dialog-body">
       <h2 id="setup-h">Setup check</h2>
@@ -266,6 +334,7 @@
         <a href="#help-sources">Sources and the mixer</a>
         <a href="#help-mic">Mic processing</a>
         <a href="#help-soundboard">Soundboard</a>
+        <a href="#help-music">Music</a>
         <a href="#help-hotkeys">Hotkeys</a>
         <a href="#help-trouble">Troubleshooting</a>
       </nav>
@@ -328,6 +397,16 @@
             <li>To trim a sound, open its ⚙ and drag the edges of its waveform, or type times. <b>Trim silence</b> cuts quiet bits off both ends, fades smooth the start and end, and <b>Preview</b> plays it only to you (through Hear sounds). The file isn't changed, so <b>Reset</b> restores it.</li>
             <li>The soundboard is also a card in the mixer, with its own volume, mute and hotkeys. If you remove that card, the soundboard offers to add it back.</li>
             <li><b>Hear sounds</b> plays the soundboard on your Windows default output at <b>Your volume</b>, so you hear your sounds without hearing your own voice. It pauses while Listen is on, as Listen already includes them.</li>
+          </ul>
+        </section>
+
+        <section id="help-music">
+          <h3>Music</h3>
+          <ul>
+            <li><b>Add music</b> adds folders (searched, including subfolders) or single files by their path. Copy a folder's path from Explorer's address bar, or use <b>Folders…</b> / <b>Files…</b> to pick them in a Windows file picker, which may open behind your browser. Files are played where they are, not copied.</li>
+            <li>Tracks play one after another, from the disk, so long tracks and big folders are fine. Click a track to play it. Shuffle mixes the order up; repeat goes round the list, or repeats one track.</li>
+            <li><b>Turn the music down while I talk</b> lowers it while your mic hears you: by the noise gate if it's on, otherwise when you're loud enough.</li>
+            <li>The music is a card in the mixer with its own volume, mute and hotkeys (play/pause, next, previous). <b>Hear music</b> plays it on your Windows default output at <b>Your volume</b>; it pauses while Listen is on.</li>
           </ul>
         </section>
 

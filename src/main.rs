@@ -3,10 +3,12 @@
 
 mod backend;
 mod config;
+mod decode;
 mod dsp;
 mod engine;
 mod hotkeys;
 mod mixer;
+mod music;
 mod platform;
 mod server;
 mod soundboard;

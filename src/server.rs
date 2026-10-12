@@ -2,7 +2,7 @@
 
 use crate::backend::PLATFORM_SUPPORTED;
 use crate::config::{DeviceRef, Hotkey, SourceKind};
-use crate::engine::{ChannelPatch, Engine, SoundPatch, SoundboardPatch};
+use crate::engine::{ChannelPatch, Engine, MusicControl, MusicPatch, SoundPatch, SoundboardPatch};
 use crate::platform;
 use crate::soundboard::MAX_FILE_BYTES;
 use axum::body::Bytes;
@@ -88,6 +88,11 @@ pub fn router(engine: Arc<Engine>, port: u16, quit: Arc<dyn Fn() + Send + Sync>)
         .route("/api/sounds/stop", post(stop_sounds))
         .route("/api/sounds/order", put(reorder_sounds))
         .route("/api/soundboard", patch(update_soundboard))
+        .route("/api/music", patch(update_music))
+        .route("/api/music/items", post(add_music))
+        .route("/api/music/items/{id}", axum::routing::delete(remove_music))
+        .route("/api/music/control", post(music_control))
+        .route("/api/music/browse", post(browse_music))
         .route("/api/sounds/{id}", patch(update_sound).delete(remove_sound))
         .route("/api/sounds/{id}/play", post(play_sound))
         .route("/api/sounds/{id}/preview", post(preview_sound))
@@ -306,6 +311,51 @@ async fn sound_waveform(State(app): State<App>, Path(id): Path<String>) -> ApiRe
     Ok(Json(waveform).into_response())
 }
 
+#[derive(Deserialize)]
+struct MusicPath {
+    path: String,
+}
+
+/// Scanning a folder can take a while, so these run off the executor.
+async fn add_music(State(app): State<App>, Json(body): Json<MusicPath>) -> ApiResult {
+    let id = blocking(&app, StatusCode::BAD_REQUEST, move |e| {
+        e.add_music(&body.path)
+    })
+    .await?;
+    Ok(Json(json!({ "id": id })).into_response())
+}
+
+async fn remove_music(State(app): State<App>, Path(id): Path<String>) -> ApiResult {
+    blocking(&app, StatusCode::BAD_REQUEST, move |e| e.remove_music(&id)).await?;
+    ok()
+}
+
+async fn music_control(State(app): State<App>, Json(body): Json<MusicControl>) -> ApiResult {
+    app.engine.music_control(body).map_err(bad)?;
+    ok()
+}
+
+async fn update_music(State(app): State<App>, Json(body): Json<MusicPatch>) -> ApiResult {
+    // Switching Hear music on queries the default output, which can block.
+    blocking(&app, StatusCode::BAD_REQUEST, move |e| e.update_music(body)).await?;
+    ok()
+}
+
+#[derive(Deserialize)]
+struct Browse {
+    folders: bool,
+}
+
+/// Shows the Windows file picker on the desktop and returns the chosen
+/// paths (it waits until the user closes it).
+async fn browse_music(State(app): State<App>, Json(body): Json<Browse>) -> ApiResult {
+    let paths = blocking(&app, StatusCode::BAD_REQUEST, move |_| {
+        platform::browse(body.folders)
+    })
+    .await?;
+    Ok(Json(json!({ "paths": paths })).into_response())
+}
+
 async fn stop_sounds(State(app): State<App>) -> ApiResult {
     app.engine.stop_sounds();
     ok()
@@ -389,6 +439,7 @@ async fn stream_updates(mut socket: WebSocket, engine: Arc<Engine>, connection: 
                 "type": "meters",
                 "meters": engine.meters(),
                 "playing": engine.playing_sounds(),
+                "music_position_ms": engine.music_position_ms(),
             }),
             changed = changes.changed() => {
                 if changed.is_err() { return; }

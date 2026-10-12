@@ -26,6 +26,13 @@ const ICONS = {
   refresh: `<svg ${SVG}><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></svg>`,
   plus: `<svg ${SVG}><path d="M12 5v14M5 12h14"/></svg>`,
   play: `<svg ${SVG}><path d="M8 5.5v13l10.5-6.5z" fill="currentColor" stroke-width="1.5"/></svg>`,
+  pause: `<svg ${SVG}><rect x="6.5" y="5" width="4" height="14" rx="1" fill="currentColor" stroke="none"/><rect x="13.5" y="5" width="4" height="14" rx="1" fill="currentColor" stroke="none"/></svg>`,
+  next: `<svg ${SVG}><path d="M5.5 5.5v13l9.5-6.5z" fill="currentColor" stroke-width="1.5"/><path d="M18 5.5v13" stroke-width="2.5"/></svg>`,
+  previous: `<svg ${SVG}><path d="M18.5 5.5v13L9 12z" fill="currentColor" stroke-width="1.5"/><path d="M6 5.5v13" stroke-width="2.5"/></svg>`,
+  shuffle: `<svg ${SVG}><path d="M3 7h3.5c4.5 0 6.5 10 11 10H21M3 17h3.5c1.7 0 2.9-1.4 4-3.2M14.5 9.6C15.5 8 16.6 7 18 7h3"/><path d="M18 4l3 3-3 3M18 14l3 3-3 3"/></svg>`,
+  repeat: `<svg ${SVG}><path d="M4 11V9.5A3.5 3.5 0 0 1 7.5 6H20"/><path d="M17 3l3 3-3 3"/><path d="M20 13v1.5a3.5 3.5 0 0 1-3.5 3.5H4"/><path d="M7 21l-3-3 3-3"/></svg>`,
+  repeatOne: `<svg ${SVG}><path d="M4 11V9.5A3.5 3.5 0 0 1 7.5 6H20"/><path d="M17 3l3 3-3 3"/><path d="M20 13v1.5a3.5 3.5 0 0 1-3.5 3.5H4"/><path d="M7 21l-3-3 3-3"/><path d="M11 10.5l1.5-1v5" stroke-width="1.8"/></svg>`,
+  music: `<svg ${SVG}><path d="M9 18V5.5l11-2V16"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/></svg>`,
   stop: `<svg ${SVG}><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/></svg>`,
   headphones: `<svg ${SVG}><path d="M4 16v-4a8 8 0 0 1 16 0v4"/><rect x="3" y="14" width="4.5" height="7" rx="1.5"/><rect x="16.5" y="14" width="4.5" height="7" rx="1.5"/></svg>`,
   close: `<svg ${SVG}><path d="M6 6l12 12M18 6L6 18"/></svg>`,
@@ -124,6 +131,7 @@ function connect() {
     else if (msg.type === "meters") {
       updateMeters(msg.meters);
       updatePlaying(msg.playing || []);
+      updateMusicPosition(msg.music_position_ms);
     }
   };
   ws.onclose = () => {
@@ -152,6 +160,7 @@ function render(next) {
   renderListen();
   renderSounds();
   renderHear();
+  renderMusic();
   renderHotkeys();
   renderSetup();
 }
@@ -222,6 +231,7 @@ function channelList() {
       app: [s.exe, "window"],
       device: [s.device ? s.device.name : "Default microphone (follows Windows)", "mic"],
       soundboard: ["Sounds from the soundboard below", "speaker"],
+      music: ["Music from the player below", "music"],
     }[s.kind];
     list.push({ ...s, detail, icon });
   }
@@ -668,6 +678,7 @@ function setupChecks() {
   }
   if (state.hear_status.state === "error") add("warn", "Hear sounds can't play", state.hear_status.message, { help: "help-trouble" });
   if (state.monitor.state === "error") add("warn", "Listen can't play", state.monitor.message, { help: "help-trouble" });
+  if (state.music.error) add("warn", "A music track couldn't be played", state.music.error, { help: "help-music" });
   return checks;
 }
 
@@ -965,7 +976,7 @@ function renderSounds() {
 function renderHear() {
   const on = state.hear_sounds;
   $("#hear-sounds").setAttribute("aria-pressed", String(on));
-  $("#hear-row").hidden = !on;
+  $("#hear-row").hidden = !on || !state.sounds.length;
   if (document.activeElement !== $("#hear-gain")) showHearGain(state.hear_sounds_db);
   const status = $("#hear-status");
   const h = state.hear_status;
@@ -1403,6 +1414,177 @@ $("#trim-reset").addEventListener("click", () => {
 });
 window.addEventListener("resize", drawWave);
 
+// ---------------------------------------------------------------- music
+
+let lastTracks = "";
+let lastMusicHint = null;
+const musicBack = el("button", { type: "button", className: "link", textContent: "Add it back" });
+musicBack.addEventListener("click", () => attempt(api("POST", "/api/sources", { kind: "music" })));
+let seeking = false; // the user is dragging the seek bar
+
+const clock = (ms) => {
+  const s = Math.floor(ms / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
+
+function renderMusic() {
+  const m = state.music;
+  const inMix = state.sources.some((s) => s.kind === "music");
+  const hasTracks = m.tracks.length > 0;
+  $("#player").hidden = !hasTracks;
+  $("#hear-music").setAttribute("aria-pressed", String(m.hear));
+  $("#hear-music-row").hidden = !m.hear || !hasTracks;
+  if (document.activeElement !== $("#hear-music-gain")) {
+    $("#hear-music-gain").value = m.hear_db;
+    $("#hear-music-value").textContent = formatDb(m.hear_db);
+  }
+
+  let hint = "";
+  if (!m.items.length) hint = "No music yet. Add a folder or files with Add music.";
+  else if (!hasTracks) hint = "No audio files found in the folders and files you added.";
+  else if (!inMix) hint = "The music isn't in the mix, so nobody hears it. ";
+  else if (m.error) hint = `Couldn't play ${m.error}`;
+  if (hint !== lastMusicHint) {
+    lastMusicHint = hint;
+    $("#music-hint").replaceChildren(hint, ...(hasTracks && !inMix ? [musicBack] : []));
+  }
+  $("#music-hint").hidden = !hint;
+  $("#music-hint").classList.toggle("error", !!m.error && hasTracks && inMix);
+
+  const current = m.current;
+  const name = current !== null && current !== undefined ? m.tracks[current] : null;
+  $("#now-title").textContent = m.title || name || "Nothing playing";
+  $("#now-artist").textContent = m.artist || "";
+  const toggle = $("#music-toggle");
+  toggle.dataset.icon = m.playing ? "pause" : "play";
+  toggle.setAttribute("aria-label", m.playing ? "Pause" : "Play");
+  drawIcons(toggle);
+  $("#music-shuffle").setAttribute("aria-pressed", String(m.shuffle));
+  const repeat = $("#music-repeat");
+  repeat.setAttribute("aria-pressed", String(m.repeat !== "off"));
+  repeat.dataset.icon = m.repeat === "one" ? "repeatOne" : "repeat";
+  repeat.setAttribute("aria-label", `Repeat: ${{ off: "off", all: "all tracks", one: "this track" }[m.repeat]}`);
+  repeat.title = repeat.getAttribute("aria-label");
+  drawIcons(repeat);
+  $("#music-duck").checked = m.duck;
+  const seek = $("#music-seek");
+  seek.disabled = !m.duration_ms;
+  if (m.duration_ms) seek.max = m.duration_ms;
+  $("#music-dur").textContent = m.duration_ms ? clock(m.duration_ms) : "–:––";
+
+  // The list: rebuilt only when the tracks change; the current one marked.
+  const signature = JSON.stringify(m.tracks);
+  const list = $("#tracks");
+  if (signature !== lastTracks) {
+    lastTracks = signature;
+    list.replaceChildren(...m.tracks.map((t, i) => {
+      const btn = el("button", { type: "button" }, el("span", { className: "num", textContent: i + 1 }), el("span", { textContent: t }));
+      btn.addEventListener("click", () => attempt(api("POST", "/api/music/control", { action: "play", track: i })));
+      return el("li", {}, btn);
+    }));
+  }
+  [...list.children].forEach((li, i) => {
+    const on = i === current;
+    li.classList.toggle("current", on);
+    if (on) li.firstChild.setAttribute("aria-current", "true");
+    else li.firstChild.removeAttribute("aria-current");
+  });
+
+  if ($("#music-dialog").open) renderMusicItems();
+}
+
+function updateMusicPosition(ms) {
+  if (ms === undefined || seeking || !state) return;
+  $("#music-seek").value = ms;
+  $("#music-pos").textContent = clock(ms);
+}
+
+const musicControl = (body) => attempt(api("POST", "/api/music/control", body));
+$("#music-toggle").addEventListener("click", () => musicControl({ action: "toggle" }));
+$("#music-next").addEventListener("click", () => musicControl({ action: "next" }));
+$("#music-prev").addEventListener("click", () => musicControl({ action: "previous" }));
+$("#music-shuffle").addEventListener("click", () => attempt(api("PATCH", "/api/music", { shuffle: !state.music.shuffle })));
+$("#music-repeat").addEventListener("click", () => {
+  const next = { off: "all", all: "one", one: "off" }[state.music.repeat];
+  attempt(api("PATCH", "/api/music", { repeat: next }));
+});
+$("#music-duck").addEventListener("change", (e) => attempt(api("PATCH", "/api/music", { duck: e.target.checked })));
+$("#music-seek").addEventListener("input", (e) => {
+  seeking = true;
+  $("#music-pos").textContent = clock(Number(e.target.value));
+});
+$("#music-seek").addEventListener("change", (e) => {
+  seeking = false;
+  musicControl({ action: "seek", position_ms: Number(e.target.value) });
+});
+$("#hear-music").addEventListener("click", () => attempt(api("PATCH", "/api/music", { hear: !state.music.hear })));
+const sendHearMusic = throttle((db) => attempt(api("PATCH", "/api/music", { hear_db: db })), 60);
+$("#hear-music-gain").addEventListener("input", (e) => {
+  const db = Number(e.target.value);
+  $("#hear-music-value").textContent = formatDb(db);
+  sendHearMusic(db);
+});
+
+// ---- the files and folders dialog
+
+function renderMusicItems() {
+  const items = state.music.items;
+  $("#music-items").replaceChildren(...(items.length ? items.map((item) => {
+    const remove = el("button", { type: "button", className: "ghost icon", "data-icon": "close", title: "Remove", "aria-label": `Remove ${item.path}` });
+    remove.addEventListener("click", () => attempt(api("DELETE", `/api/music/items/${item.id}`)));
+    return el("li", {}, el("span", { className: "path", textContent: item.path }), remove);
+  }) : [el("li", { className: "empty", textContent: "Nothing added yet." })]));
+}
+
+function musicError(message) {
+  $("#music-error").textContent = message || "";
+  $("#music-error").hidden = !message;
+}
+
+async function addMusicPaths(paths) {
+  const failures = [];
+  for (const path of paths) {
+    try {
+      await api("POST", "/api/music/items", { path });
+    } catch (e) {
+      failures.push(paths.length > 1 ? `${path}: ${e.message}` : e.message);
+    }
+  }
+  musicError(failures.join("\n"));
+  return failures.length === 0;
+}
+
+$("#music-add").addEventListener("click", () => {
+  musicError("");
+  $("#music-path").value = "";
+  $("#music-browse").hidden = !state.platform_supported;
+  renderMusicItems();
+  $("#music-dialog").showModal();
+  $("#music-path").focus();
+});
+$("#music-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const path = $("#music-path").value.trim();
+  if (!path) return;
+  if (await addMusicPaths([path])) $("#music-path").value = "";
+});
+for (const [sel, folders] of [["#browse-folders", true], ["#browse-files", false]]) {
+  $(sel).addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    musicError("");
+    try {
+      const { paths } = await api("POST", "/api/music/browse", { folders });
+      if (paths.length) await addMusicPaths(paths);
+    } catch (err) {
+      musicError(err.message);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+$("#music-done").addEventListener("click", () => $("#music-dialog").close());
+
 // ---------------------------------------------------------------- hotkeys
 
 const ACTIONS = [
@@ -1411,12 +1593,18 @@ const ACTIONS = [
   ["push_to_mute", "Push to mute"],
   ["play_sound", "Play sound"],
   ["stop_sounds", "Stop all sounds"],
+  ["music_play_pause", "Music: play/pause"],
+  ["music_next", "Music: next track"],
+  ["music_previous", "Music: previous track"],
 ];
+
+/** Actions that don't apply to a channel or sound. */
+const NO_TARGET = { stop_sounds: "All sounds", music_play_pause: "Music", music_next: "Music", music_previous: "Music" };
 
 /** [value, label] choices for a hotkey's target, which depend on its action. */
 function targetsFor(action) {
   if (action === "play_sound") return state.sounds.map((s) => [s.id, s.name]);
-  if (action === "stop_sounds") return [["", "All sounds"]];
+  if (action in NO_TARGET) return [["", NO_TARGET[action]]];
   return [["master", "Master"], ...state.sources.map((s) => [s.id, s.name])];
 }
 
@@ -1424,7 +1612,7 @@ function targetsFor(action) {
 function targetFor(action, current) {
   const targets = targetsFor(action);
   if (targets.some(([v]) => v === current)) return current;
-  if (action === "play_sound" || action === "stop_sounds") return targets.length ? targets[0][0] : "";
+  if (action === "play_sound" || action in NO_TARGET) return targets.length ? targets[0][0] : "";
   return state.sources[0] ? state.sources[0].id : "master";
 }
 
@@ -1599,7 +1787,7 @@ function renderHotkeys(force = false) {
 
     const target = el("select", {
       "aria-label": `Hotkey ${i + 1} ${row.action === "play_sound" ? "sound" : "channel"}`,
-      disabled: row.action === "stop_sounds",
+      disabled: row.action in NO_TARGET,
     }, ...targets.map(([v, t]) => el("option", { value: v, textContent: t })));
     target.value = row.target;
     target.addEventListener("change", () => updateRow(key, { target: target.value }));

@@ -9,11 +9,12 @@
 
 use crate::backend::{Backend, CaptureStream, CaptureTarget, DeviceInfo, NullRender, RenderStream};
 use crate::config::{
-    Channel, Config, DeviceRef, GateMode, Hotkey, HotkeyAction, Processing, SoundConfig,
-    SourceConfig, SourceKind, db_to_gain, new_id,
+    Channel, Config, DeviceRef, GateMode, Hotkey, HotkeyAction, MusicItem, Processing, Repeat,
+    SoundConfig, SourceConfig, SourceKind, db_to_gain, new_id,
 };
 use crate::dsp::{ProcessingControl, Processor};
 use crate::mixer::{ChannelControl, Mixer, MonitorTap, push_frames, source_ring};
+use crate::music::{self, MusicPlayer, MusicView};
 use crate::soundboard::{self, MAX_FILE_BYTES, MAX_SOUNDS, Player, Trim};
 use anyhow::{Context, anyhow, bail};
 use serde::{Deserialize, Serialize};
@@ -121,9 +122,8 @@ struct Inner {
 struct Monitor {
     /// What it's for, in messages: "listen", "hear sounds".
     what: &'static str,
-    tap: MonitorTap,
-    /// Its volume.
-    ctrl: Arc<ChannelControl>,
+    /// What it plays, each with its own volume.
+    inputs: Vec<(MonitorTap, Arc<ChannelControl>)>,
     worker: Option<Worker>,
     status: SharedStatus,
     /// (default output id, mix output id) it was last set up for; a change
@@ -133,11 +133,10 @@ struct Monitor {
 }
 
 impl Monitor {
-    fn new(what: &'static str, tap: MonitorTap, ctrl: Arc<ChannelControl>) -> Self {
+    fn new(what: &'static str, inputs: Vec<(MonitorTap, Arc<ChannelControl>)>) -> Self {
         Self {
             what,
-            tap,
-            ctrl,
+            inputs,
             worker: None,
             status: Arc::new(Mutex::new(Status::new("idle", ""))),
             key: None,
@@ -146,7 +145,9 @@ impl Monitor {
     }
 
     fn stop(&mut self) {
-        *self.tap.lock().unwrap() = None;
+        for (tap, _) in &self.inputs {
+            *tap.lock().unwrap() = None;
+        }
         if let Some(w) = self.worker.take() {
             w.stop();
         }
@@ -167,6 +168,7 @@ pub struct Engine {
     master: Arc<ChannelControl>,
     mixer: Arc<Mutex<Mixer>>,
     player: Arc<Player>,
+    music: Arc<MusicPlayer>,
     tap: MonitorTap,
     changed: tokio::sync::watch::Sender<u64>,
     shutdown: AtomicBool,
@@ -185,6 +187,46 @@ pub struct ChannelPatch {
     pub noise_gate: Option<bool>,
     pub gate_mode: Option<GateMode>,
     pub gate_db: Option<f32>,
+}
+
+/// The music player for the UI: settings, list and what's playing.
+#[derive(Serialize)]
+pub struct MusicStateView {
+    pub items: Vec<MusicItem>,
+    pub shuffle: bool,
+    pub repeat: Repeat,
+    pub duck: bool,
+    pub duck_db: f32,
+    pub hear: bool,
+    pub hear_db: f32,
+    #[serde(flatten)]
+    pub player: MusicView,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct MusicPatch {
+    pub shuffle: Option<bool>,
+    pub repeat: Option<Repeat>,
+    pub duck: Option<bool>,
+    pub duck_db: Option<f32>,
+    pub hear: Option<bool>,
+    pub hear_db: Option<f32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum MusicControl {
+    Toggle,
+    Pause,
+    Next,
+    Previous,
+    /// Play a track (index into the list) from the start.
+    Play {
+        track: usize,
+    },
+    Seek {
+        position_ms: u64,
+    },
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -258,6 +300,7 @@ pub struct StateView {
     pub hear_sounds_db: f32,
     /// Hear sounds status.
     pub hear_status: Status,
+    pub music: MusicStateView,
     pub sounds: Vec<SoundView>,
 }
 
@@ -288,18 +331,39 @@ impl Engine {
         let mixer = Arc::new(Mutex::new(Mixer::new(master.clone())));
         let tap: MonitorTap = Arc::default();
         let player = Arc::new(Player::default());
+        let changed = tokio::sync::watch::channel(0).0;
+        let notify = changed.clone();
+        let music = MusicPlayer::new(config.music.shuffle, config.music.repeat, move || {
+            notify.send_modify(|v| *v += 1)
+        });
+        music
+            .duck
+            .enabled
+            .store(config.music.duck, Ordering::Relaxed);
+        music.duck.set_db(config.music.duck_db);
         let listen = Monitor::new(
             "listen",
-            tap.clone(),
-            Arc::new(ChannelControl::new(1.0, false)),
+            vec![(tap.clone(), Arc::new(ChannelControl::new(1.0, false)))],
         );
+        // Hear sounds and Hear music share one monitor, each muted when off.
         let hear = Monitor::new(
             "hear sounds",
-            player.tap.clone(),
-            Arc::new(ChannelControl::new(
-                db_to_gain(config.hear_sounds_db),
-                false,
-            )),
+            vec![
+                (
+                    player.tap.clone(),
+                    Arc::new(ChannelControl::new(
+                        db_to_gain(config.hear_sounds_db),
+                        !config.hear_sounds,
+                    )),
+                ),
+                (
+                    music.tap.clone(),
+                    Arc::new(ChannelControl::new(
+                        db_to_gain(config.music.hear_db),
+                        !config.music.hear,
+                    )),
+                ),
+            ],
         );
         let mut sources = HashMap::new();
         for s in &config.sources {
@@ -322,13 +386,15 @@ impl Engine {
             master,
             mixer,
             player,
+            music,
             tap,
-            changed: tokio::sync::watch::channel(0).0,
+            changed,
             shutdown: AtomicBool::new(false),
             supervising: Mutex::new(()),
         });
         engine.restart_output(&mut engine.inner.lock().unwrap());
         engine.load_sounds();
+        engine.rescan_music_in_background();
         let weak = Arc::downgrade(&engine);
         std::thread::Builder::new()
             .name("supervisor".into())
@@ -376,6 +442,7 @@ impl Engine {
         }
         inner.listen.stop();
         inner.hear.stop();
+        self.music.shutdown();
         for rt in inner.sources.values_mut() {
             if let Some(w) = rt.capture.take() {
                 w.stop();
@@ -414,6 +481,16 @@ impl Engine {
             hear_sounds: inner.config.hear_sounds,
             hear_sounds_db: inner.config.hear_sounds_db,
             hear_status: inner.hear.status.lock().unwrap().clone(),
+            music: MusicStateView {
+                items: inner.config.music.items.clone(),
+                shuffle: inner.config.music.shuffle,
+                repeat: inner.config.music.repeat,
+                duck: inner.config.music.duck,
+                duck_db: inner.config.music.duck_db,
+                hear: inner.config.music.hear,
+                hear_db: inner.config.music.hear_db,
+                player: self.music.view(),
+            },
             sounds: inner
                 .config
                 .sounds
@@ -482,6 +559,11 @@ impl Engine {
         self.player.playing()
     }
 
+    /// Where the current music track is.
+    pub fn music_position_ms(&self) -> u64 {
+        self.music.position_ms()
+    }
+
     pub fn autostart_admin(&self) -> bool {
         self.inner.lock().unwrap().config.autostart_admin
     }
@@ -527,10 +609,12 @@ impl Engine {
             .iter()
             .position(|s| s.id == id)
             .ok_or_else(|| anyhow!("no such source"))?;
-        if inner.config.sources.remove(index).kind == SourceKind::Soundboard {
+        match inner.config.sources.remove(index).kind {
             // Nothing plays them any more; don't let them resume when the
             // soundboard comes back.
-            self.player.clear();
+            SourceKind::Soundboard => self.player.clear(),
+            SourceKind::Music => self.music.pause(),
+            _ => {}
         }
         if let Some(rt) = inner.sources.remove(id)
             && let Some(w) = rt.capture
@@ -665,7 +749,10 @@ impl Engine {
             crate::hotkeys::parse(&h.keys)?;
             let exists = match h.action {
                 HotkeyAction::PlaySound => inner.config.sounds.iter().any(|s| s.id == h.target),
-                HotkeyAction::StopSounds => true,
+                HotkeyAction::StopSounds
+                | HotkeyAction::MusicPlayPause
+                | HotkeyAction::MusicNext
+                | HotkeyAction::MusicPrevious => true,
                 _ => h.target == MASTER || inner.sources.contains_key(&h.target),
             };
             if !exists {
@@ -678,7 +765,13 @@ impl Engine {
                 if h.id.is_empty() {
                     h.id = new_id("h");
                 }
-                if h.action == HotkeyAction::StopSounds {
+                if matches!(
+                    h.action,
+                    HotkeyAction::StopSounds
+                        | HotkeyAction::MusicPlayPause
+                        | HotkeyAction::MusicNext
+                        | HotkeyAction::MusicPrevious
+                ) {
                     h.target.clear();
                 }
                 h
@@ -991,9 +1084,8 @@ impl Engine {
         let mut inner = self.inner.lock().unwrap();
         if let Some(db) = patch.hear_sounds_db {
             inner.config.hear_sounds_db = db.clamp(-60.0, 12.0);
-            inner
-                .hear
-                .ctrl
+            inner.hear.inputs[HEAR_SOUNDS]
+                .1
                 .set_gain(db_to_gain(inner.config.hear_sounds_db));
         }
         let toggled = patch
@@ -1001,7 +1093,159 @@ impl Engine {
             .is_some_and(|on| on != inner.config.hear_sounds);
         if let Some(on) = patch.hear_sounds {
             inner.config.hear_sounds = on;
+            inner.hear.inputs[HEAR_SOUNDS].1.set_muted(!on);
         }
+        self.bump(&mut inner);
+        drop(inner);
+        if toggled {
+            self.supervise();
+        }
+        Ok(())
+    }
+
+    // -- music ----------------------------------------------------------------
+
+    /// Scans the saved music folders without delaying startup.
+    fn rescan_music_in_background(self: &Arc<Self>) {
+        let weak = Arc::downgrade(self);
+        std::thread::Builder::new()
+            .name("music scan".into())
+            .spawn(move || {
+                if let Some(engine) = weak.upgrade() {
+                    engine.rescan_music();
+                }
+            })
+            .expect("spawn music scan");
+    }
+
+    /// Re-reads the playlist's files and folders. Can take a while for big
+    /// folders, so call it off the async executor.
+    fn rescan_music(&self) {
+        let paths: Vec<String> = {
+            let inner = self.inner.lock().unwrap();
+            inner
+                .config
+                .music
+                .items
+                .iter()
+                .map(|i| i.path.clone())
+                .collect()
+        };
+        self.music.set_tracks(music::scan(&paths));
+        self.changed.send_modify(|v| *v += 1);
+    }
+
+    /// Adds a music file or folder (by path) to the playlist, and the music
+    /// player to the mix if it isn't there.
+    pub fn add_music(&self, path: &str) -> anyhow::Result<String> {
+        let path = path.trim().trim_matches('"');
+        check_len("path", path, MAX_PATH_CHARS)?;
+        let p = std::path::Path::new(path);
+        if !p.is_absolute() {
+            bail!("enter the full path, e.g. C:\\Users\\you\\Music");
+        }
+        if !p.exists() {
+            bail!("can't find {path}");
+        }
+        if !p.is_dir() && !music::is_audio(p) {
+            bail!("that isn't an audio file or a folder");
+        }
+        let mut inner = self.inner.lock().unwrap();
+        if inner.config.music.items.iter().any(|i| i.path == path) {
+            bail!("that's already in the playlist");
+        }
+        if inner.config.music.items.len() >= MAX_MUSIC_ITEMS {
+            bail!("too many files and folders (max {MAX_MUSIC_ITEMS})");
+        }
+        let add_source = !inner
+            .config
+            .sources
+            .iter()
+            .any(|s| s.kind == SourceKind::Music);
+        if add_source {
+            push_source(&mut inner, None, SourceKind::Music)?;
+        }
+        let id = new_id("m");
+        inner.config.music.items.push(MusicItem {
+            id: id.clone(),
+            path: path.to_owned(),
+        });
+        self.bump(&mut inner);
+        drop(inner);
+        self.rescan_music();
+        if add_source {
+            self.supervise();
+        }
+        Ok(id)
+    }
+
+    pub fn remove_music(&self, id: &str) -> anyhow::Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        let before = inner.config.music.items.len();
+        inner.config.music.items.retain(|i| i.id != id);
+        if inner.config.music.items.len() == before {
+            bail!("no such file or folder");
+        }
+        self.bump(&mut inner);
+        drop(inner);
+        self.rescan_music();
+        Ok(())
+    }
+
+    pub fn music_control(&self, control: MusicControl) -> anyhow::Result<()> {
+        match control {
+            MusicControl::Toggle => self.music.toggle(),
+            MusicControl::Pause => self.music.pause(),
+            MusicControl::Next => self.music.next(),
+            MusicControl::Previous => self.music.previous(),
+            MusicControl::Play { track } => {
+                if !self.music.play_track(track) {
+                    bail!("no such track");
+                }
+            }
+            MusicControl::Seek { position_ms } => self.music.seek(position_ms),
+        }
+        self.changed.send_modify(|v| *v += 1);
+        Ok(())
+    }
+
+    pub fn update_music(&self, patch: MusicPatch) -> anyhow::Result<()> {
+        if [patch.duck_db, patch.hear_db]
+            .iter()
+            .flatten()
+            .any(|db| !db.is_finite())
+        {
+            bail!("invalid volume");
+        }
+        let mut inner = self.inner.lock().unwrap();
+        let m = &mut inner.config.music;
+        if let Some(on) = patch.shuffle {
+            m.shuffle = on;
+            self.music.set_shuffle(on);
+        }
+        if let Some(repeat) = patch.repeat {
+            m.repeat = repeat;
+            self.music.set_repeat(repeat);
+        }
+        if let Some(on) = patch.duck {
+            m.duck = on;
+            self.music.duck.enabled.store(on, Ordering::Relaxed);
+        }
+        if let Some(db) = patch.duck_db {
+            m.duck_db = db.clamp(-40.0, 0.0);
+            self.music.duck.set_db(m.duck_db);
+        }
+        let toggled = patch.hear.is_some_and(|on| on != m.hear);
+        if let Some(on) = patch.hear {
+            m.hear = on;
+        }
+        if let Some(db) = patch.hear_db {
+            m.hear_db = db.clamp(-60.0, 12.0);
+        }
+        let (hear, hear_db) = (m.hear, m.hear_db);
+        let ctrl = &inner.hear.inputs[HEAR_MUSIC].1;
+        ctrl.set_muted(!hear);
+        ctrl.set_gain(db_to_gain(hear_db));
         self.bump(&mut inner);
         drop(inner);
         if toggled {
@@ -1056,11 +1300,13 @@ impl Engine {
     }
 
     fn start_monitor(&self, m: &mut Monitor, device: DeviceInfo) {
-        let (tx, rx) = source_ring();
-        *m.tap.lock().unwrap() = Some(tx);
-        // A one-input mixer gives us priming, drift trimming and gain ramps.
+        // A mixer gives us priming, drift trimming and gain ramps.
         let mut mixer = Mixer::new(Arc::new(ChannelControl::new(1.0, false)));
-        mixer.set_input("monitor", m.ctrl.clone(), rx);
+        for (i, (tap, ctrl)) in m.inputs.iter().enumerate() {
+            let (tx, rx) = source_ring();
+            *tap.lock().unwrap() = Some(tx);
+            mixer.set_input(&format!("monitor {i}"), ctrl.clone(), rx);
+        }
         let status = Arc::new(Mutex::new(Status::new("waiting", "Starting…")));
         m.status = status.clone();
         let backend = self.backend.clone();
@@ -1152,6 +1398,15 @@ impl Engine {
             self.restart_output(&mut inner);
             changed = true;
         }
+        // Ducking listens to the microphones.
+        *self.music.duck.mics.lock().unwrap() = inner
+            .config
+            .sources
+            .iter()
+            .filter(|s| matches!(s.kind, SourceKind::Device { .. }))
+            .filter_map(|s| inner.sources.get(&s.id))
+            .map(|rt| rt.processing.clone())
+            .collect();
         let output = inner.config.output.clone();
         let (listening, hearing) = (!inner.listeners.is_empty(), hear_wanted(&inner));
         let fields = &mut *inner; // borrow both monitors at once
@@ -1255,6 +1510,7 @@ impl Engine {
                     }
                 }
                 SourceKind::Soundboard => Capture::Soundboard(self.player.clone()),
+                SourceKind::Music => Capture::Music(self.music.clone()),
                 SourceKind::App { exe } => match found.get(exe).copied().flatten() {
                     Some(pid) => {
                         tracing::info!("source {:?}: found {exe} as PID {pid}", src.name);
@@ -1334,6 +1590,7 @@ fn push_source(
         (None, SourceKind::Device { device: None }) => "Default microphone".into(),
         (None, SourceKind::App { exe }) => display_exe(exe),
         (None, SourceKind::Soundboard) => "Soundboard".into(),
+        (None, SourceKind::Music) => "Music".into(),
     };
     if let SourceKind::App { exe } = &kind {
         if exe.trim().is_empty() {
@@ -1345,14 +1602,9 @@ fn push_source(
     if inner.config.sources.len() >= MAX_SOURCES {
         bail!("too many sources (max {MAX_SOURCES})");
     }
-    if kind == SourceKind::Soundboard
-        && inner
-            .config
-            .sources
-            .iter()
-            .any(|s| s.kind == SourceKind::Soundboard)
-    {
-        bail!("the soundboard is already in the mix");
+    let single = matches!(kind, SourceKind::Soundboard | SourceKind::Music);
+    if single && inner.config.sources.iter().any(|s| s.kind == kind) {
+        bail!("the {} is already in the mix", name.to_lowercase());
     }
     let id = new_id("s");
     let cfg = SourceConfig {
@@ -1423,16 +1675,21 @@ fn reorder<T>(
     Ok(())
 }
 
-/// Hear sounds plays while it's on, the soundboard is in the mix, and Listen
-/// is off (Listen already includes the soundboard).
+const MAX_PATH_CHARS: usize = 1_000;
+const MAX_MUSIC_ITEMS: usize = 200;
+
+/// Which of the Hear monitor's inputs is which.
+const HEAR_SOUNDS: usize = 0;
+const HEAR_MUSIC: usize = 1;
+
+/// The Hear monitor plays while Hear sounds is on with the soundboard in
+/// the mix, or Hear music with the music in it, and Listen is off (Listen
+/// already includes both).
 fn hear_wanted(inner: &Inner) -> bool {
-    inner.config.hear_sounds
-        && inner.listeners.is_empty()
-        && inner
-            .config
-            .sources
-            .iter()
-            .any(|s| s.kind == SourceKind::Soundboard)
+    let has = |kind: SourceKind| inner.config.sources.iter().any(|s| s.kind == kind);
+    inner.listeners.is_empty()
+        && ((inner.config.hear_sounds && has(SourceKind::Soundboard))
+            || (inner.config.music.hear && has(SourceKind::Music)))
 }
 
 fn display_exe(exe: &str) -> String {
@@ -1453,6 +1710,7 @@ enum Capture {
         processing: Option<Arc<ProcessingControl>>,
     },
     Soundboard(Arc<Player>),
+    Music(Arc<MusicPlayer>),
 }
 
 impl std::fmt::Debug for Capture {
@@ -1460,6 +1718,7 @@ impl std::fmt::Debug for Capture {
         match self {
             Capture::Backend { target, .. } => target.fmt(f),
             Capture::Soundboard(_) => f.write_str("Soundboard"),
+            Capture::Music(_) => f.write_str("Music"),
         }
     }
 }
@@ -1490,6 +1749,10 @@ fn capture_thread(
         ),
         Capture::Soundboard(player) => (
             Ok(Box::new(soundboard::Stream::new(player)) as Box<dyn CaptureStream>),
+            None,
+        ),
+        Capture::Music(player) => (
+            Ok(Box::new(music::Stream::new(player)) as Box<dyn CaptureStream>),
             None,
         ),
     };
@@ -1778,7 +2041,12 @@ mod tests {
 
     /// A short 16-bit mono WAV file.
     fn wav() -> Vec<u8> {
-        let samples = vec![1000i16; 4_800];
+        wav_of(4_800)
+    }
+
+    /// A 16-bit mono 48 kHz WAV file `frames` long.
+    fn wav_of(frames: usize) -> Vec<u8> {
+        let samples = vec![1000i16; frames];
         let data_len = (samples.len() * 2) as u32;
         let mut f = Vec::new();
         f.extend(b"RIFF");
@@ -1986,6 +2254,63 @@ mod tests {
         assert_eq!(p.end_ms, Some(None));
         let p: SoundPatch = serde_json::from_str("{}").unwrap();
         assert_eq!(p.end_ms, None);
+        engine.shutdown();
+    }
+
+    #[test]
+    fn music_plays_a_folder_and_moves_on_by_itself() {
+        let engine = engine("cable");
+        let dir = std::env::temp_dir().join(format!("vam-music-{}", new_id("d")));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A second each: longer than the decoder's half-second lead, so
+        // the current track follows playback rather than decoding.
+        for name in ["1 first.wav", "2 second.wav", "notes.txt"] {
+            std::fs::write(dir.join(name), wav_of(48_000)).unwrap();
+        }
+        let folder = dir.to_string_lossy().into_owned();
+
+        assert!(engine.add_music("relative/path").is_err());
+        assert!(engine.add_music(&format!("{folder}/missing")).is_err());
+        let err = engine
+            .add_music(&dir.join("notes.txt").to_string_lossy())
+            .unwrap_err();
+        assert!(err.to_string().contains("audio"), "{err}");
+
+        let id = engine.add_music(&folder).unwrap();
+        assert!(engine.add_music(&folder).is_err(), "no duplicates");
+        let state = engine.state();
+        assert_eq!(state.music.player.tracks, ["1 first", "2 second"]);
+        assert!(
+            state.sources.iter().any(|s| s.kind == SourceKind::Music),
+            "the first music adds the player to the mix"
+        );
+
+        engine
+            .music_control(MusicControl::Play { track: 0 })
+            .unwrap();
+        // The music source's thread plays the 100 ms tracks back to back.
+        let mut current = Vec::new();
+        for _ in 0..600 {
+            let c = engine.state().music.player.current;
+            if current.last() != Some(&c) {
+                current.push(c);
+            }
+            if current.len() >= 3 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            current,
+            [Some(0), Some(1), Some(0)],
+            "plays on, and repeats the list (the default)"
+        );
+        engine.music_control(MusicControl::Pause).unwrap();
+        assert!(!engine.state().music.player.playing);
+
+        engine.remove_music(&id).unwrap();
+        assert!(engine.state().music.player.tracks.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
         engine.shutdown();
     }
 

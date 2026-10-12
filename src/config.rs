@@ -23,6 +23,52 @@ pub struct Config {
     /// Start with Windows uses the elevated scheduled task instead of the
     /// `Run` registry entry.
     pub autostart_admin: bool,
+    pub music: MusicConfig,
+}
+
+/// The music playlist and its settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MusicConfig {
+    /// Files and folders, as added.
+    pub items: Vec<MusicItem>,
+    pub shuffle: bool,
+    pub repeat: Repeat,
+    /// Turn the music down while you talk, by `duck_db`.
+    pub duck: bool,
+    pub duck_db: f32,
+    /// Play the music on your own default output too, at `hear_db`.
+    pub hear: bool,
+    pub hear_db: f32,
+}
+
+impl Default for MusicConfig {
+    fn default() -> Self {
+        Self {
+            items: Vec::new(),
+            shuffle: false,
+            repeat: Repeat::All,
+            duck: false,
+            duck_db: -12.0,
+            hear: true,
+            hear_db: 0.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MusicItem {
+    pub id: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Repeat {
+    #[default]
+    Off,
+    All,
+    One,
 }
 
 impl Default for Config {
@@ -37,6 +83,7 @@ impl Default for Config {
             hear_sounds: true,
             hear_sounds_db: 0.0,
             autostart_admin: false,
+            music: MusicConfig::default(),
         }
     }
 }
@@ -140,6 +187,8 @@ pub enum SourceKind {
     App { exe: String },
     /// The built-in soundboard (at most one).
     Soundboard,
+    /// The music player (at most one).
+    Music,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -164,6 +213,9 @@ pub enum HotkeyAction {
     PushToMute,
     PlaySound,
     StopSounds,
+    MusicPlayPause,
+    MusicNext,
+    MusicPrevious,
 }
 
 pub fn data_dir() -> PathBuf {
