@@ -505,6 +505,21 @@ function updateMeters(meters) {
   }
 }
 
+// ---------------------------------------------------------------- dialogs
+
+// Clicking the dimmed backdrop outside a dialog closes it. The dialog's
+// content fills it edge to edge, so a click on the <dialog> element itself
+// is a click on the backdrop. Only when the press also started there, so
+// selecting text and releasing outside doesn't close it.
+for (const dialog of document.querySelectorAll("dialog")) {
+  let pressedOutside = false;
+  dialog.addEventListener("pointerdown", (e) => (pressedOutside = e.target === dialog));
+  dialog.addEventListener("click", (e) => {
+    if (e.target === dialog && pressedOutside) dialog.close();
+    pressedOutside = false;
+  });
+}
+
 // ---------------------------------------------------------------- info and help
 
 /** The (i) buttons next to panel headings toggle a short explanation. */
