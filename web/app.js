@@ -245,33 +245,50 @@ function createStrip(ch) {
 }
 
 /** Swaps the dB label for a number field; Enter or blur applies, Esc cancels. */
+/** Parses a typed gain: accepts "−6", "-6,5", "-6 dB". Returns null if invalid. */
+function parseDb(text) {
+  const normalised = text.trim().replace(/\s*db$/i, "").replace("\u2212", "-").replace(",", ".");
+  if (normalised === "") return null;
+  const db = Number(normalised);
+  return Number.isFinite(db) ? Math.max(-60, Math.min(12, Math.round(db * 2) / 2)) : null;
+}
+
+/** Swaps the dB label for a text field; Enter or blur applies, Esc cancels. */
 function editGain(id, parts) {
-  const input = el("input", { type: "number", className: "gain-input", min: -60, max: 12, step: 0.5, value: Number(parts.gain.value) });
-  input.setAttribute("aria-label", "Volume in dB");
+  const opened = parts.gain.value;
+  const input = el("input", {
+    type: "text",
+    inputMode: "decimal",
+    className: "gain-input",
+    value: opened,
+    "aria-label": `${parts.name.value} volume in dB`,
+  });
   parts.gainValue.replaceWith(input);
   input.focus();
   input.select();
   let done = false;
-  const finish = (apply) => {
+  const finish = (apply, refocus) => {
     if (done) return;
     done = true;
-    const value = input.value.trim().replace("−", "-");
-    if (apply && value !== "" && Number.isFinite(Number(value))) {
-      const db = Math.max(-60, Math.min(12, Math.round(Number(value) * 2) / 2));
+    const db = parseDb(input.value);
+    // Only send a change the user made: blurring an untouched field must not
+    // overwrite a newer gain that arrived meanwhile.
+    if (apply && db !== null && input.value !== opened) {
       parts.gain.value = db;
       parts.gainValue.textContent = formatDb(db);
       attempt(api("PATCH", `/api/channels/${id}`, { gain_db: db }));
     }
     input.replaceWith(parts.gainValue);
-    parts.gainValue.focus();
+    // Refocus only for keyboard exits; a click or Tab elsewhere keeps its target.
+    if (refocus) parts.gainValue.focus();
   };
   input.addEventListener("keydown", (e) => {
     if (e.key !== "Enter" && e.key !== "Escape") return;
     // Otherwise the same keypress "clicks" the label we refocus, reopening this.
     e.preventDefault();
-    finish(e.key === "Enter");
+    finish(e.key === "Enter", true);
   });
-  input.addEventListener("blur", () => finish(true));
+  input.addEventListener("blur", () => finish(true, false));
 }
 
 function renderListen() {
@@ -283,25 +300,37 @@ function renderListen() {
   const m = state.monitor;
   monitorStatus.hidden = m.state === "idle";
   monitorStatus.className = `status monitor-status ${m.state}`;
-  monitorStatus.textContent = m.state === "running" ? `Listening on ${m.message}` : m.message;
+  const text = m.state === "running" ? `Listening on ${m.message}` : m.message;
+  // Listen is shared: say so when another window turned it on.
+  monitorStatus.textContent = !listening && m.state !== "idle" ? `${text} (turned on in another window)` : text;
 }
 
 function sourceOrder() {
   return state.sources.map((s) => s.id);
 }
 
+/** Applies a new order locally right away (so quick moves build on each
+ * other) and saves it, restoring the previous order if the save fails. */
 function saveOrder(ids) {
-  if (JSON.stringify(ids) !== JSON.stringify(sourceOrder())) {
-    attempt(api("PUT", "/api/sources/order", { ids }));
-  }
+  if (JSON.stringify(ids) === JSON.stringify(sourceOrder())) return;
+  const previous = state.sources;
+  state.sources = ids.map((id) => previous.find((s) => s.id === id));
+  renderStrips();
+  api("PUT", "/api/sources/order", { ids }).catch((e) => {
+    state.sources = previous;
+    renderStrips();
+    toast(e.message);
+  });
 }
+
+let dropped = false; // whether the current drag ended in a drop on the mixer
 
 function setUpReorder(node, handle, id) {
   // Only the handle starts a drag, so text in the card stays selectable.
   handle.addEventListener("pointerdown", () => (node.draggable = true));
-  handle.addEventListener("pointerup", () => (node.draggable = false));
   node.addEventListener("dragstart", (e) => {
     dragId = id;
+    dropped = false;
     node.classList.add("dragging");
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", id);
@@ -310,7 +339,11 @@ function setUpReorder(node, handle, id) {
     node.draggable = false;
     node.classList.remove("dragging");
     dragId = null;
-    saveOrder([...document.querySelectorAll("#strips .strip:not(.master)")].map((n) => n.dataset.id));
+    if (dropped) {
+      saveOrder([...document.querySelectorAll("#strips .strip:not(.master)")].map((n) => n.dataset.id));
+    } else {
+      renderStrips(); // cancelled (Esc, or dropped elsewhere): put the cards back
+    }
   });
   handle.addEventListener("keydown", (e) => {
     const step = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[e.key];
@@ -325,17 +358,30 @@ function setUpReorder(node, handle, id) {
   });
 }
 
+// A handle press that didn't become a drag must not leave its card draggable.
+for (const type of ["pointerup", "pointercancel"]) {
+  document.addEventListener(type, () => {
+    if (dragId) return;
+    for (const strip of strips.values()) strip.el.draggable = false;
+  });
+}
+
 $("#strips").addEventListener("dragover", (e) => {
   if (!dragId) return;
   e.preventDefault();
   const dragged = strips.get(dragId).el;
   const target = e.target.closest(".strip");
   if (!target || target === dragged || target.classList.contains("master")) return;
-  const r = target.getBoundingClientRect();
-  const after = e.clientX > r.left + r.width / 2;
+  // Moving towards the end of the list lands after the target, towards the
+  // start before it, which works whether the cards wrap in rows or stack.
+  const cards = [...target.parentNode.children];
+  const after = cards.indexOf(dragged) < cards.indexOf(target);
   target.parentNode.insertBefore(dragged, after ? target.nextSibling : target);
 });
-$("#strips").addEventListener("drop", (e) => e.preventDefault());
+$("#strips").addEventListener("drop", (e) => {
+  e.preventDefault();
+  if (dragId) dropped = true;
+});
 
 function renderStrips() {
   const container = $("#strips");
@@ -354,8 +400,10 @@ function renderStrips() {
     strip.el.setAttribute("aria-label", ch.name);
     p.gain.setAttribute("aria-label", `${ch.name} volume`);
     p.mute.setAttribute("aria-label", `Mute ${ch.name}`);
-    if (p.remove.isConnected) p.remove.setAttribute("aria-label", `Remove ${ch.name}`);
-    if (p.handle.isConnected) p.handle.setAttribute("aria-label", `Reorder ${ch.name}`);
+    if (ch.id !== "master") {
+      p.remove.setAttribute("aria-label", `Remove ${ch.name}`);
+      p.handle.setAttribute("aria-label", `Reorder ${ch.name}`);
+    }
     if (document.activeElement !== p.name) p.name.value = ch.name;
     p.detail.textContent = ch.detail;
     p.detail.title = ch.detail;
@@ -368,6 +416,7 @@ function renderStrips() {
       p.gain.value = ch.gain_db;
       p.gainValue.textContent = formatDb(ch.gain_db);
       p.gain.setAttribute("aria-valuetext", formatDb(ch.gain_db));
+      p.gainValue.setAttribute("aria-label", `${ch.name} volume ${formatDb(ch.gain_db)}. Click to type a value`);
     }
     p.mute.setAttribute("aria-pressed", String(ch.muted));
     p.mute.textContent = ch.muted ? "Muted" : "Mute";
