@@ -294,9 +294,27 @@ fn session_pids() -> anyhow::Result<Vec<(u32, bool)>> {
 // ---------------------------------------------------------------------------
 // Process loopback activation
 
+/// Everything an in-flight activation may touch: the params, the
+/// PROPVARIANT pointing at them, and the completion event. It is shared by
+/// the waiting thread and the completion handler (which Windows keeps until
+/// the operation finishes), so it lives exactly as long as either needs it,
+/// even if we stop waiting after a timeout.
+struct ActivationState {
+    params: AUDIOCLIENT_ACTIVATION_PARAMS,
+    /// Its Drop would PropVariantClear (CoTaskMemFree) the blob, which points
+    /// into `params` and is ours, so it is never dropped.
+    prop: std::mem::ManuallyDrop<PROPVARIANT>,
+    done: Event,
+}
+
+// SAFETY: the raw pointers are only read by Windows during activation, and
+// the event handle may be signalled from any thread.
+unsafe impl Send for ActivationState {}
+unsafe impl Sync for ActivationState {}
+
 #[implement(IActivateAudioInterfaceCompletionHandler)]
 struct ActivationHandler {
-    event: usize,
+    state: std::sync::Arc<ActivationState>,
 }
 
 impl IActivateAudioInterfaceCompletionHandler_Impl for ActivationHandler_Impl {
@@ -304,59 +322,51 @@ impl IActivateAudioInterfaceCompletionHandler_Impl for ActivationHandler_Impl {
         &self,
         _op: windows::core::Ref<IActivateAudioInterfaceAsyncOperation>,
     ) -> windows::core::Result<()> {
-        unsafe { SetEvent(HANDLE(self.event as *mut _)) }
+        unsafe { SetEvent(self.state.done.0) }
     }
 }
 
 fn activate_process_loopback(pid: u32) -> anyhow::Result<IAudioClient> {
     ensure_com();
     tracing::info!("activating process loopback for PID {pid}");
-    unsafe {
-        // The activation PROPVARIANT and the params its blob points at must
-        // outlive the async operation, which may still run after a timeout,
-        // so they live on the heap and are leaked rather than freed then.
-        // PROPVARIANT's Drop would PropVariantClear (CoTaskMemFree) the blob,
-        // which we own, so it is never dropped either.
-        struct Activation {
-            params: AUDIOCLIENT_ACTIVATION_PARAMS,
-            prop: std::mem::ManuallyDrop<PROPVARIANT>,
-        }
-        let mut activation = Box::new(Activation {
-            params: AUDIOCLIENT_ACTIVATION_PARAMS {
-                ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
-                Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
-                    ProcessLoopbackParams: AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
-                        TargetProcessId: pid,
-                        ProcessLoopbackMode: PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
-                    },
+    let mut state = std::sync::Arc::new(ActivationState {
+        params: AUDIOCLIENT_ACTIVATION_PARAMS {
+            ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
+            Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
+                ProcessLoopbackParams: AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
+                    TargetProcessId: pid,
+                    ProcessLoopbackMode: PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
                 },
             },
-            prop: std::mem::ManuallyDrop::new(PROPVARIANT::default()),
-        });
-        let params_ptr = &mut activation.params as *mut AUDIOCLIENT_ACTIVATION_PARAMS as *mut u8;
-        {
-            let inner = &mut *activation.prop.Anonymous.Anonymous;
-            inner.vt = VT_BLOB;
-            inner.Anonymous.blob.cbSize = size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>() as u32;
-            inner.Anonymous.blob.pBlobData = params_ptr;
-        }
+        },
+        prop: std::mem::ManuallyDrop::new(PROPVARIANT::default()),
+        done: Event::new()?,
+    });
+    {
+        // Still the only reference, and the Arc's allocation never moves, so
+        // the blob pointer stays valid for the state's whole life.
+        let st = std::sync::Arc::get_mut(&mut state).expect("unshared");
+        let params_ptr = &mut st.params as *mut AUDIOCLIENT_ACTIVATION_PARAMS as *mut u8;
+        let inner = unsafe { &mut *st.prop.Anonymous.Anonymous };
+        inner.vt = VT_BLOB;
+        inner.Anonymous.blob.cbSize = size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>() as u32;
+        inner.Anonymous.blob.pBlobData = params_ptr;
+    }
 
-        let done = Event::new()?;
-        let handler: IActivateAudioInterfaceCompletionHandler = ActivationHandler {
-            event: done.0.0 as usize,
-        }
-        .into();
+    let handler: IActivateAudioInterfaceCompletionHandler = ActivationHandler {
+        state: state.clone(),
+    }
+    .into();
+    unsafe {
         let op = ActivateAudioInterfaceAsync(
             VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
             &IAudioClient::IID,
-            Some(&*activation.prop),
+            Some(&*state.prop),
             &handler,
         )?;
-        if !done.wait(5_000)? {
-            // The operation may still complete later: keep everything it can
-            // touch (params, PROPVARIANT, event handle) alive for good.
-            Box::leak(activation);
-            std::mem::forget(done);
+        // On a timeout (or wait error) we just stop waiting; the handler's
+        // reference keeps the state alive until the operation completes.
+        if !state.done.wait(5_000)? {
             bail!("timed out activating process loopback");
         }
         tracing::info!("process loopback activation completed");
