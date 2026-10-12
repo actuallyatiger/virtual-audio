@@ -283,7 +283,7 @@ dialog::backdrop { background: rgb(0 0 0 / .5); }
   padding: 6px 4px 6px 12px; text-align: left;
 }
 .sound .play-icon { color: var(--accent); flex: none; }
-.sound .play-icon svg { width: 16px; height: 16px; }
+.sound .play-icon svg { width: 22px; height: 22px; }
 .sound .sound-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sound .edit { margin-right: 6px; color: var(--muted); border-radius: 6px; }
 .sound .edit:hover { color: var(--text); background: color-mix(in srgb, var(--accent) 15%, transparent); }
