@@ -58,7 +58,9 @@ It runs as a small tray app and is controlled from a web page served on
 - **Global hotkeys**: toggle mute, push-to-talk or push-to-mute on any
   channel, play a sound, or stop all sounds.
   Keyboard combos and mouse side buttons (Mouse4/Mouse5) both work. Hotkeys
-  don't swallow the key, so it still reaches the game you're in.
+  don't swallow the key, so it still reaches the game you're in. While an
+  app running as administrator is focused (some games do this), Windows
+  hides its keys from other apps, so run the mixer as administrator too.
 - **Setup check** and **Help** in the top bar, and an ⓘ next to each
   section explaining it.
 - Start with Windows (runs in the background, tray icon only).

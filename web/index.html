@@ -107,7 +107,7 @@
       </div>
       <div class="info-pop" id="hk-info" hidden>
         <ul>
-          <li>Hotkeys work anywhere, even while a game is focused, and the key still reaches that app.</li>
+          <li>Hotkeys work while other apps are focused, and the key still reaches that app. They can't see keys while an app running as administrator is focused (some games do this): run the mixer as administrator too.</li>
           <li><b>Push to talk</b> keeps a channel silent unless the keys are held; <b>push to mute</b> silences it while they're held.</li>
           <li>Keyboard combinations and the mouse side buttons (Mouse4, Mouse5) both work.</li>
         </ul>
@@ -310,7 +310,8 @@
         <section id="help-hotkeys">
           <h3>Hotkeys</h3>
           <ul>
-            <li>Hotkeys work anywhere, even while a game is focused, and don't block the key from reaching that app.</li>
+            <li>Hotkeys work while other apps are focused, such as a game, and don't block the key from reaching that app.</li>
+            <li>Windows hides keys typed into an app running as administrator from apps that aren't, so hotkeys stop working while such an app is focused (some games and their launchers run this way, and voice chat apps' hotkeys have the same limit). Run the mixer as administrator too: right-click <code>virtual-audio.exe</code> → <b>Run as administrator</b>, or set that under <b>Properties → Compatibility</b>. Some anti-cheat software blocks other apps' hotkeys regardless.</li>
             <li>Actions: <b>toggle mute</b>, <b>push to talk</b> (silent unless held), <b>push to mute</b> (silent while held), <b>play sound</b> and <b>stop all sounds</b>.</li>
             <li>Click a hotkey's keys to record new ones. Keyboard combinations and the mouse side buttons (Mouse4, Mouse5) both work.</li>
           </ul>
@@ -322,6 +323,7 @@
             <li><b>Others hear nothing</b>: check <b>Setup check</b>, that the app you talk in uses CABLE Output, and that the mic card's meter moves when you speak.</li>
             <li><b>Everything I play ends up in the mic, or I hear nothing</b>: your Windows default output is probably the cable. Set it back to your speakers or headphones in Settings → System → Sound.</li>
             <li><b>Listen or Hear sounds is refused</b>: they play on the Windows default output, which mustn't be the device the mix goes to.</li>
+            <li><b>Hotkeys don't work in a game</b>: the game probably runs as administrator. See <a href="#help-hotkeys">Hotkeys</a>.</li>
             <li><b>The gate cuts out quiet words</b>: switch it to <i>Above a level I set</i> and lower the line.</li>
           </ul>
           <p>The app keeps its files in <code>%APPDATA%\VirtualAudioMixer</code>: <code>config.json</code> (your settings), <code>sounds\</code>, and <code>log.txt</code> (this run) and <code>log.previous.txt</code> (the run before), which the tray menu's <b>Open log file</b> opens. A <code>config.json</code> that can't be read is moved aside as <code>config.&lt;time&gt;.json.bad</code>.</p>
