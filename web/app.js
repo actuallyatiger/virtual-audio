@@ -953,6 +953,10 @@ function renderSounds() {
     } else {
       $("#sound-preview").disabled = sound.state !== "ready";
       if (document.activeElement !== $("#sound-gain")) showSoundGain(sound.gain_db);
+      if (!trimDrag) {
+        trim = trimOf(sound);
+        showTrim();
+      }
     }
   }
 }
@@ -1177,6 +1181,7 @@ function openSoundDialog(id) {
   showSoundGain(sound.gain_db);
   $("#sound-preview").disabled = sound.state !== "ready";
   $("#sound-dialog").showModal();
+  loadWaveform(id);
 }
 
 function saveSoundName() {
@@ -1193,7 +1198,7 @@ $("#sound-gain").addEventListener("input", () => {
   sendSoundGain(editingSound, db);
 });
 $("#sound-name").addEventListener("change", saveSoundName);
-$("#sound-preview").addEventListener("click", () => attempt(api("POST", `/api/sounds/${editingSound}/play`)));
+$("#sound-preview").addEventListener("click", () => attempt(api("POST", `/api/sounds/${editingSound}/preview`)));
 $("#sound-delete").addEventListener("click", () => {
   const sound = state.sounds.find((s) => s.id === editingSound);
   if (!sound || !confirm(`Delete “${sound.name}” from the soundboard?`)) return;
@@ -1209,6 +1214,171 @@ $("#sound-dialog").addEventListener("close", () => {
   (edit || $("#add-sound")).focus();
   editingSound = null;
 });
+
+// ---- trim editor: the waveform with draggable edges, plus typed times
+
+let wave = null; // { duration_ms, peaks, silence_start_ms, silence_end_ms }
+let trim = null; // { start, end, fadeIn, fadeOut } in ms, as shown
+let trimDrag = null; // "start" or "end" while dragging an edge
+
+function trimOf(sound) {
+  const duration = sound.duration_ms || (wave && wave.duration_ms) || 0;
+  return { start: sound.start_ms, end: sound.end_ms ?? duration, fadeIn: sound.fade_in_ms, fadeOut: sound.fade_out_ms };
+}
+
+async function loadWaveform(id) {
+  wave = null;
+  const sound = state.sounds.find((s) => s.id === id);
+  trim = sound ? trimOf(sound) : null;
+  $("#trim").hidden = !sound || sound.state !== "ready";
+  showTrim();
+  if ($("#trim").hidden) return;
+  try {
+    const w = await api("GET", `/api/sounds/${id}/waveform`);
+    if (editingSound !== id) return;
+    wave = w;
+    showTrim();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+const secs = (ms) => (ms / 1000).toFixed(2);
+
+function showTrim() {
+  if (!trim) return;
+  for (const [sel, ms] of [["#trim-start", trim.start], ["#trim-end", trim.end], ["#fade-in", trim.fadeIn], ["#fade-out", trim.fadeOut]]) {
+    if (document.activeElement !== $(sel)) $(sel).value = secs(ms);
+  }
+  if (wave) {
+    $("#trim-start").max = $("#trim-end").max = secs(wave.duration_ms);
+    $("#trim-silence").disabled = wave.silence_start_ms <= trim.start && wave.silence_end_ms >= trim.end;
+  }
+  drawWave();
+}
+
+function drawWave() {
+  const canvas = $("#trim-wave");
+  if (!wave || !trim || !canvas.isConnected) return;
+  const scale = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth * scale, h = canvas.clientHeight * scale;
+  if (!w) return;
+  canvas.width = w;
+  canvas.height = h;
+  const g = canvas.getContext("2d");
+  const css = getComputedStyle(document.documentElement);
+  const accent = css.getPropertyValue("--accent").trim();
+  const muted = css.getPropertyValue("--muted").trim();
+  const x = (ms) => (ms / wave.duration_ms) * w;
+  const [x0, x1] = [x(trim.start), x(trim.end)];
+  // Selected part highlighted, the rest dimmed.
+  g.fillStyle = accent;
+  g.globalAlpha = 0.14;
+  g.fillRect(x0, 0, x1 - x0, h);
+  g.globalAlpha = 1;
+  const bar = w / wave.peaks.length;
+  // Scaled to the sound's own loudest point, so quiet sounds still show
+  // their shape.
+  const loudest = Math.max(...wave.peaks) || 1;
+  wave.peaks.forEach((peak, i) => {
+    const p = peak / loudest;
+    const bx = i * bar;
+    const inside = bx + bar / 2 >= x0 && bx + bar / 2 <= x1;
+    g.fillStyle = inside ? accent : muted;
+    g.globalAlpha = inside ? 1 : 0.45;
+    const bh = Math.max(scale, p * (h - 8 * scale));
+    g.fillRect(bx, (h - bh) / 2, Math.max(scale, bar - scale), bh);
+  });
+  g.globalAlpha = 1;
+  // Fades, as a line from silent to full level.
+  g.strokeStyle = css.getPropertyValue("--text").trim();
+  g.lineWidth = 1.5 * scale;
+  g.globalAlpha = 0.6;
+  g.beginPath();
+  g.moveTo(x0, h);
+  g.lineTo(x(trim.start + trim.fadeIn), 2 * scale);
+  g.lineTo(x(trim.end - trim.fadeOut), 2 * scale);
+  g.lineTo(x1, h);
+  g.stroke();
+  g.globalAlpha = 1;
+  // The draggable edges.
+  g.fillStyle = accent;
+  for (const ex of [x0, x1]) {
+    g.fillRect(ex - scale, 0, 2 * scale, h);
+    g.fillRect(ex - 4 * scale, 0, 8 * scale, 10 * scale);
+    g.fillRect(ex - 4 * scale, h - 10 * scale, 8 * scale, 10 * scale);
+  }
+}
+
+/** Sends trim changes (ms), with an end at the very end sent as null. */
+function saveTrim(changes) {
+  const id = editingSound;
+  const body = {};
+  if ("start" in changes) body.start_ms = Math.round(changes.start);
+  if ("end" in changes) body.end_ms = wave && changes.end >= wave.duration_ms ? null : Math.round(changes.end);
+  if ("fadeIn" in changes) body.fade_in_ms = Math.round(changes.fadeIn);
+  if ("fadeOut" in changes) body.fade_out_ms = Math.round(changes.fadeOut);
+  api("PATCH", `/api/sounds/${id}`, body).catch((e) => {
+    toast(e.message);
+    const sound = state.sounds.find((s) => s.id === id);
+    if (sound && editingSound === id) {
+      trim = trimOf(sound);
+      showTrim();
+    }
+  });
+}
+
+const MIN_TRIM_MS = 20;
+
+$("#trim-wave").addEventListener("pointerdown", (e) => {
+  if (!wave || !trim) return;
+  const rect = e.currentTarget.getBoundingClientRect();
+  const ms = ((e.clientX - rect.left) / rect.width) * wave.duration_ms;
+  // Grab whichever edge is nearer.
+  trimDrag = Math.abs(ms - trim.start) <= Math.abs(ms - trim.end) ? "start" : "end";
+  e.currentTarget.setPointerCapture(e.pointerId);
+  moveEdge(e);
+});
+function moveEdge(e) {
+  if (!trimDrag) return;
+  const rect = $("#trim-wave").getBoundingClientRect();
+  const ms = Math.max(0, Math.min(wave.duration_ms, ((e.clientX - rect.left) / rect.width) * wave.duration_ms));
+  if (trimDrag === "start") trim.start = Math.min(ms, trim.end - MIN_TRIM_MS);
+  else trim.end = Math.max(ms, trim.start + MIN_TRIM_MS);
+  showTrim();
+}
+$("#trim-wave").addEventListener("pointermove", moveEdge);
+for (const type of ["pointerup", "pointercancel"]) {
+  $("#trim-wave").addEventListener(type, () => {
+    if (!trimDrag) return;
+    const edge = trimDrag;
+    trimDrag = null;
+    saveTrim({ [edge]: trim[edge] });
+  });
+}
+for (const [sel, key] of [["#trim-start", "start"], ["#trim-end", "end"], ["#fade-in", "fadeIn"], ["#fade-out", "fadeOut"]]) {
+  $(sel).addEventListener("change", (e) => {
+    const value = Number(e.target.value);
+    if (!Number.isFinite(value) || value < 0) return showTrim();
+    trim[key] = value * 1000;
+    saveTrim({ [key]: trim[key] });
+    showTrim();
+  });
+}
+$("#trim-silence").addEventListener("click", () => {
+  if (!wave) return;
+  trim.start = wave.silence_start_ms;
+  trim.end = wave.silence_end_ms;
+  saveTrim({ start: trim.start, end: trim.end });
+  showTrim();
+});
+$("#trim-reset").addEventListener("click", () => {
+  if (!wave) return;
+  trim = { start: 0, end: wave.duration_ms, fadeIn: 0, fadeOut: 0 };
+  saveTrim(trim);
+  showTrim();
+});
+window.addEventListener("resize", drawWave);
 
 // ---------------------------------------------------------------- hotkeys
 

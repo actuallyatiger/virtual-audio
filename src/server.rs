@@ -90,6 +90,8 @@ pub fn router(engine: Arc<Engine>, port: u16, quit: Arc<dyn Fn() + Send + Sync>)
         .route("/api/soundboard", patch(update_soundboard))
         .route("/api/sounds/{id}", patch(update_sound).delete(remove_sound))
         .route("/api/sounds/{id}/play", post(play_sound))
+        .route("/api/sounds/{id}/preview", post(preview_sound))
+        .route("/api/sounds/{id}/waveform", get(sound_waveform))
         .route("/api/quit", post(quit_app))
         .route("/ws", get(ws))
         .layer(middleware::from_fn_with_state(app.clone(), guard))
@@ -288,6 +290,20 @@ async fn update_soundboard(State(app): State<App>, Json(body): Json<SoundboardPa
 async fn reorder_sounds(State(app): State<App>, Json(body): Json<Order>) -> ApiResult {
     app.engine.reorder_sounds(&body.ids).map_err(bad)?;
     ok()
+}
+
+async fn preview_sound(State(app): State<App>, Path(id): Path<String>) -> ApiResult {
+    app.engine.preview_sound(&id).map_err(bad)?;
+    ok()
+}
+
+async fn sound_waveform(State(app): State<App>, Path(id): Path<String>) -> ApiResult {
+    // Scans the whole decoded sound; keep it off the executor.
+    let waveform = blocking(&app, StatusCode::BAD_REQUEST, move |e| {
+        e.sound_waveform(&id)
+    })
+    .await?;
+    Ok(Json(waveform).into_response())
 }
 
 async fn stop_sounds(State(app): State<App>) -> ApiResult {

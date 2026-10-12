@@ -14,7 +14,7 @@ use crate::config::{
 };
 use crate::dsp::{ProcessingControl, Processor};
 use crate::mixer::{ChannelControl, Mixer, MonitorTap, push_frames, source_ring};
-use crate::soundboard::{self, MAX_FILE_BYTES, MAX_SOUNDS, Player};
+use crate::soundboard::{self, MAX_FILE_BYTES, MAX_SOUNDS, Player, Trim};
 use anyhow::{Context, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -197,6 +197,22 @@ pub struct SoundboardPatch {
 pub struct SoundPatch {
     pub name: Option<String>,
     pub gain_db: Option<f32>,
+    pub start_ms: Option<u32>,
+    /// `null` plays to the end again.
+    #[serde(default, deserialize_with = "present")]
+    pub end_ms: Option<Option<u32>>,
+    pub fade_in_ms: Option<u32>,
+    pub fade_out_ms: Option<u32>,
+}
+
+/// Tells a field that was sent as `null` (`Some(None)`) from one that was
+/// left out (`None`).
+fn present<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::deserialize(d).map(Some)
 }
 
 #[derive(Serialize)]
@@ -217,6 +233,12 @@ pub struct SoundView {
     pub id: String,
     pub name: String,
     pub gain_db: f32,
+    pub start_ms: u32,
+    pub end_ms: Option<u32>,
+    pub fade_in_ms: u32,
+    pub fade_out_ms: u32,
+    /// Length of the whole file, once loaded.
+    pub duration_ms: Option<u32>,
     /// "loading", "ready" or "error".
     pub state: &'static str,
     pub message: String,
@@ -408,6 +430,11 @@ impl Engine {
                         id: s.id.clone(),
                         name: s.name.clone(),
                         gain_db: s.gain_db,
+                        start_ms: s.start_ms,
+                        end_ms: s.end_ms,
+                        fade_in_ms: s.fade_in_ms,
+                        fade_out_ms: s.fade_out_ms,
+                        duration_ms: self.player.duration_ms(&s.id),
                         state,
                         message,
                     }
@@ -690,9 +717,12 @@ impl Engine {
                     };
                     match result {
                         Ok(samples) => {
-                            engine
-                                .player
-                                .insert(&sound.id, samples, db_to_gain(current.gain_db));
+                            engine.player.insert(
+                                &sound.id,
+                                samples,
+                                db_to_gain(current.gain_db),
+                                trim_of(current),
+                            );
                         }
                         Err(e) => {
                             tracing::warn!("sound {:?}: {e:#}", sound.name);
@@ -760,12 +790,16 @@ impl Engine {
             let _ = std::fs::remove_file(&path);
             return Err(e);
         }
-        self.player.insert(&id, samples, 1.0);
+        self.player.insert(&id, samples, 1.0, Trim::default());
         inner.config.sounds.push(SoundConfig {
             id: id.clone(),
             name,
             file,
             gain_db: 0.0,
+            start_ms: 0,
+            end_ms: None,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
         });
         self.bump(&mut inner);
         drop(inner);
@@ -793,7 +827,57 @@ impl Engine {
             sound.gain_db = db.clamp(-60.0, 12.0);
             self.player.set_gain(id, db_to_gain(sound.gain_db));
         }
+        let trimmed = patch.start_ms.is_some()
+            || patch.end_ms.is_some()
+            || patch.fade_in_ms.is_some()
+            || patch.fade_out_ms.is_some();
+        if trimmed {
+            // Validate the whole trim before changing anything.
+            let duration = self
+                .player
+                .duration_ms(id)
+                .ok_or_else(|| anyhow!("the sound is still loading"))?;
+            let start = patch.start_ms.unwrap_or(sound.start_ms).min(duration);
+            let end = patch
+                .end_ms
+                .unwrap_or(sound.end_ms)
+                .map(|e| e.min(duration));
+            let length = end.unwrap_or(duration).saturating_sub(start);
+            if length < MIN_SOUND_MS {
+                bail!("the trimmed sound must be at least {MIN_SOUND_MS} ms long");
+            }
+            let fade_in = patch.fade_in_ms.unwrap_or(sound.fade_in_ms);
+            let fade_out = patch.fade_out_ms.unwrap_or(sound.fade_out_ms);
+            if fade_in > MAX_FADE_MS || fade_out > MAX_FADE_MS {
+                bail!("fades can be at most {MAX_FADE_MS} ms");
+            }
+            sound.start_ms = start;
+            // An end at the very end is the same as no end.
+            sound.end_ms = end.filter(|&e| e < duration);
+            sound.fade_in_ms = fade_in;
+            sound.fade_out_ms = fade_out;
+            self.player.set_trim(id, trim_of(sound));
+        }
         self.bump(&mut inner);
+        Ok(())
+    }
+
+    /// The sound's shape for the trim editor.
+    pub fn sound_waveform(&self, id: &str) -> anyhow::Result<soundboard::Waveform> {
+        self.player
+            .waveform(id, WAVEFORM_BUCKETS)
+            .ok_or_else(|| anyhow!("the sound isn't loaded"))
+    }
+
+    /// Plays a sound to you alone, through Hear sounds, to try out a trim.
+    pub fn preview_sound(&self, id: &str) -> anyhow::Result<()> {
+        let inner = self.inner.lock().unwrap();
+        if inner.hear.status.lock().unwrap().state != "running" {
+            bail!("previews play through Hear sounds, which isn't playing right now");
+        }
+        if !self.player.preview(id) {
+            bail!("the sound isn't loaded");
+        }
         Ok(())
     }
 
@@ -1312,6 +1396,15 @@ impl SourceRuntime {
 fn feeds_back(capture: &str, output: &str) -> bool {
     let capture = capture.to_lowercase();
     capture.contains("output") && capture.replacen("output", "input", 1) == output.to_lowercase()
+}
+
+/// Trims shorter than this are refused, so a sound can't vanish.
+const MIN_SOUND_MS: u32 = 20;
+const MAX_FADE_MS: u32 = 5_000;
+const WAVEFORM_BUCKETS: usize = 400;
+
+fn trim_of(s: &SoundConfig) -> Trim {
+    Trim::from_ms(s.start_ms, s.end_ms, s.fade_in_ms, s.fade_out_ms)
 }
 
 /// Sorts `items` into the order of `ids`, which must name each item once.
@@ -1843,6 +1936,60 @@ mod tests {
     }
 
     #[test]
+    fn trims_are_validated_and_saved() {
+        let engine = engine("cable");
+        let id = engine.add_sound(None, "a.wav", wav()).unwrap(); // 100 ms
+        let patch = |start: Option<u32>, end: Option<Option<u32>>| SoundPatch {
+            start_ms: start,
+            end_ms: end,
+            ..Default::default()
+        };
+        let sound = |e: &Engine| e.state().sounds.into_iter().find(|s| s.id == id).unwrap();
+        assert_eq!(sound(&engine).duration_ms, Some(100));
+
+        engine
+            .update_sound(&id, patch(Some(10), Some(Some(60))))
+            .unwrap();
+        let s = sound(&engine);
+        assert_eq!((s.start_ms, s.end_ms), (10, Some(60)));
+
+        assert!(
+            engine.update_sound(&id, patch(Some(55), None)).is_err(),
+            "under 20 ms"
+        );
+        assert_eq!(sound(&engine).start_ms, 10, "rejected trims change nothing");
+
+        engine
+            .update_sound(&id, patch(None, Some(Some(5_000))))
+            .unwrap();
+        assert_eq!(
+            sound(&engine).end_ms,
+            None,
+            "an end past the sound means the end"
+        );
+        engine
+            .update_sound(&id, patch(None, Some(Some(60))))
+            .unwrap();
+        engine.update_sound(&id, patch(None, Some(None))).unwrap();
+        assert_eq!(sound(&engine).end_ms, None, "null resets the end");
+
+        let fade = SoundPatch {
+            fade_in_ms: Some(6_000),
+            ..Default::default()
+        };
+        assert!(engine.update_sound(&id, fade).is_err());
+        let w = engine.sound_waveform(&id).unwrap();
+        assert_eq!(w.duration_ms, 100);
+
+        // JSON: a null end resets it; a missing one leaves it alone.
+        let p: SoundPatch = serde_json::from_str(r#"{"end_ms":null}"#).unwrap();
+        assert_eq!(p.end_ms, Some(None));
+        let p: SoundPatch = serde_json::from_str("{}").unwrap();
+        assert_eq!(p.end_ms, None);
+        engine.shutdown();
+    }
+
+    #[test]
     fn reorder_sounds_requires_every_sound_once() {
         let engine = engine("cable");
         let a = engine.add_sound(Some("a".into()), "a.wav", wav()).unwrap();
@@ -1915,7 +2062,7 @@ mod tests {
             id: id.into(),
             name: id.into(),
             file: file.into(),
-            gain_db: 0.0,
+            ..Default::default()
         };
         let config = Config {
             sounds: vec![

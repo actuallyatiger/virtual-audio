@@ -108,7 +108,7 @@ impl Default for Processing {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SoundConfig {
     pub id: String,
     pub name: String,
@@ -116,6 +116,16 @@ pub struct SoundConfig {
     pub file: String,
     #[serde(default)]
     pub gain_db: f32,
+    /// Trim (non-destructive): the part of the file that plays, in ms.
+    #[serde(default)]
+    pub start_ms: u32,
+    /// `None` plays to the end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_ms: Option<u32>,
+    #[serde(default)]
+    pub fade_in_ms: u32,
+    #[serde(default)]
+    pub fade_out_ms: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
