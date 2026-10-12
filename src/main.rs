@@ -48,18 +48,23 @@ fn main() -> anyhow::Result<()> {
     let (mut config, first_run) = match loaded {
         Ok(Some(config)) => (config, false),
         Ok(None) => (Config::default(), true),
-        Err(e) => {
-            match Config::back_up_unreadable() {
-                Ok(backup) => tracing::error!(
+        Err(e) => match Config::back_up_unreadable() {
+            Ok(backup) => {
+                tracing::error!(
                     "config.json is unreadable ({e}); moved it to {} and started fresh",
                     backup.display()
-                ),
-                Err(io) => tracing::error!(
-                    "config.json is unreadable ({e}) and could not be backed up: {io}"
-                ),
+                );
+                (Config::default(), true)
             }
-            (Config::default(), true)
-        }
+            Err(io) => {
+                // Starting with defaults would overwrite the only copy.
+                tracing::error!(
+                    "config.json is unreadable ({e}) and could not be backed up ({io}); \
+                     not starting so it isn't overwritten. Fix or remove it and try again."
+                );
+                anyhow::bail!("unreadable config.json could not be backed up: {io}");
+            }
+        },
     };
 
     let backend = backend::create();
