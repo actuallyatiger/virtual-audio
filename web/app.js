@@ -643,24 +643,27 @@ $("#add-source").addEventListener("click", openAddDialog);
 // ---------------------------------------------------------------- soundboard
 
 const MAX_SOUND_BYTES = 20 * 1024 * 1024;
-let uploading = null; // { done, total } while files are being added
+let uploading = null; // { queue, done, total } while files are being added
 let editingSound = null; // id of the sound open in the edit dialog
 let lastSoundsRender = "";
+let lastHint = "";
+
+const addBack = el("button", { type: "button", className: "link", textContent: "Add it back" });
+addBack.addEventListener("click", () => attempt(api("POST", "/api/sources", { kind: "soundboard" })));
 
 function renderSounds() {
   if (!state) return;
-  const hint = $("#sb-hint");
   const inMix = state.sources.some((s) => s.kind === "soundboard");
-  if (uploading) {
-    hint.textContent = `Adding sounds… ${uploading.done} of ${uploading.total} done`;
-  } else if (!state.sounds.length) {
-    hint.textContent = "Add MP3, WAV, OGG, FLAC or M4A files up to 60 seconds long, or drop them here. Then click a sound to play it into the mix.";
-  } else if (!inMix) {
-    const add = el("button", { type: "button", className: "link", textContent: "Add it back" });
-    add.addEventListener("click", () => attempt(api("POST", "/api/sources", { kind: "soundboard" })));
-    hint.replaceChildren("The soundboard isn't in the mix, so nobody hears it. ", add);
-  } else {
-    hint.textContent = "Click a sound to play it into the mix (again to restart it). Turn on 🎧 Listen on Master to hear it yourself.";
+  let hint;
+  if (uploading) hint = `Adding sounds… ${uploading.done} of ${uploading.total} done`;
+  else if (!state.sounds.length) hint = "Add MP3, WAV, OGG, FLAC or M4A files up to 60 seconds long, or drop them here. Then click a sound to play it into the mix.";
+  else if (!inMix) hint = "The soundboard isn't in the mix, so nobody hears it. ";
+  else hint = "Click a sound to play it into the mix (again to restart it). Turn on 🎧 Listen on Master to hear it yourself.";
+  // Only touch the hint when it changes, so a focused "Add it back" survives
+  // unrelated state updates.
+  if (hint !== lastHint) {
+    lastHint = hint;
+    $("#sb-hint").replaceChildren(hint, ...(!uploading && state.sounds.length && !inMix ? [addBack] : []));
   }
 
   const signature = JSON.stringify(state.sounds);
@@ -709,17 +712,32 @@ function soundTile(sound) {
 
 function updatePlaying(ids) {
   playing = new Set(ids);
-  for (const tile of document.querySelectorAll("#sounds .sound")) tile.classList.toggle("playing", playing.has(tile.dataset.id));
+  for (const tile of document.querySelectorAll("#sounds .sound")) {
+    const on = playing.has(tile.dataset.id);
+    if (tile.classList.contains("playing") === on) continue;
+    tile.classList.toggle("playing", on);
+    const play = $(".play", tile);
+    if (on) play.setAttribute("aria-description", "Playing");
+    else play.removeAttribute("aria-description");
+  }
   $("#stop-sounds").disabled = playing.size === 0;
 }
 
+/** Uploads files one at a time. Files added meanwhile join the queue. */
 async function addSounds(files) {
   const list = [...files];
-  if (!list.length || uploading) return;
-  uploading = { done: 0, total: list.length };
+  if (!list.length) return;
+  if (uploading) {
+    uploading.queue.push(...list);
+    uploading.total += list.length;
+    renderSounds();
+    return;
+  }
+  uploading = { queue: list, done: 0, total: list.length };
   renderSounds();
   const failures = [];
-  for (const file of list) {
+  while (uploading.queue.length) {
+    const file = uploading.queue.shift();
     try {
       if (file.size > MAX_SOUND_BYTES) throw new Error("the file is too big (max 20 MB)");
       const res = await fetch(`/api/sounds?filename=${encodeURIComponent(file.name)}`, {
@@ -736,7 +754,11 @@ async function addSounds(files) {
   }
   uploading = null;
   renderSounds();
-  if (failures.length) toast(failures.join("\n"));
+  if (failures.length) {
+    const shown = failures.slice(0, 3);
+    if (failures.length > 3) shown.push(`…and ${failures.length - 3} more`);
+    toast(shown.join("\n"));
+  }
 }
 
 $("#add-sound").addEventListener("click", () => $("#sound-files").click());
@@ -813,6 +835,10 @@ $("#sound-delete").addEventListener("click", () => {
 });
 $("#sound-dialog").addEventListener("close", () => {
   saveSoundName();
+  // The tiles may have been rebuilt while the dialog was open, so the edit
+  // button it came from can be gone: return focus to its replacement.
+  const edit = editingSound && document.querySelector(`#sounds .sound[data-id="${CSS.escape(editingSound)}"] .edit`);
+  (edit || $("#add-sound")).focus();
   editingSound = null;
 });
 

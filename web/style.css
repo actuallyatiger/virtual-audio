@@ -241,7 +241,7 @@ dialog::backdrop { background: rgb(0 0 0 / .5); }
 .gain-label { width: 72px; text-align: right; font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); }
 
 .toast {
-  white-space: pre-line;
+  white-space: pre-line; max-height: 60vh; overflow: auto;
   position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
   background: var(--panel-2); border: 1px solid var(--bad); color: var(--text);
   padding: 8px 14px; border-radius: 8px; max-width: calc(100vw - 32px);
