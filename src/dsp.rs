@@ -43,6 +43,8 @@ pub struct ProcessingControl {
     threshold_db: AtomicU32,
     /// Peak input level (linear, decaying) after suppression, before the gate.
     level: AtomicU32,
+    /// Peak of the raw input in the latest block, before any processing.
+    input_level: AtomicU32,
     gate_open: AtomicBool,
 }
 
@@ -54,6 +56,7 @@ impl ProcessingControl {
             gate_auto: AtomicBool::new(gate_auto),
             threshold_db: AtomicU32::new(threshold_db.to_bits()),
             level: AtomicU32::new(0f32.to_bits()),
+            input_level: AtomicU32::new(0f32.to_bits()),
             gate_open: AtomicBool::new(true),
         }
     }
@@ -74,6 +77,11 @@ impl ProcessingControl {
     }
     pub fn level(&self) -> f32 {
         f32::from_bits(self.level.load(Ordering::Relaxed))
+    }
+    /// Raw input peak (linear): unlike [`Self::level`], it isn't lowered by
+    /// noise suppression, so it tells a quiet room from a dead mic.
+    pub fn input_level(&self) -> f32 {
+        f32::from_bits(self.input_level.load(Ordering::Relaxed))
     }
     /// Whether the gate currently lets audio through (true while it is off).
     pub fn gate_open(&self) -> bool {
@@ -116,6 +124,10 @@ impl Processor {
     /// Processes interleaved stereo `data`, handing the result to `sink`
     /// (possibly in different-sized pieces).
     pub fn process(&mut self, data: &[f32], sink: &mut dyn FnMut(&[f32])) {
+        let raw = data.iter().fold(0f32, |m, s| m.max(s.abs()));
+        self.ctrl
+            .input_level
+            .store(raw.to_bits(), Ordering::Relaxed);
         let suppress = self.ctrl.suppress.load(Ordering::Relaxed);
         let gate = self.ctrl.gate.load(Ordering::Relaxed);
         if !suppress && !gate {
@@ -221,6 +233,9 @@ impl Drop for Processor {
     /// level frozen on the meter.
     fn drop(&mut self) {
         self.ctrl.level.store(0f32.to_bits(), Ordering::Relaxed);
+        self.ctrl
+            .input_level
+            .store(0f32.to_bits(), Ordering::Relaxed);
         self.ctrl.gate_open.store(true, Ordering::Relaxed);
     }
 }

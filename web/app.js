@@ -23,6 +23,7 @@ const ICONS = {
   mic: `<svg ${SVG}><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></svg>`,
   speaker: `<svg ${SVG}><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.5 9a4 4 0 0 1 0 6M19 6.5a8 8 0 0 1 0 11"/></svg>`,
   cog: `<svg ${SVG} stroke-width="1.75"><path d="M19.21 9.59 L19.51 10.81 L22.13 10.85 L22.13 13.15 L19.51 13.19 L19.21 14.41 L18.80 15.39 L18.15 16.47 L19.98 18.35 L18.35 19.98 L16.47 18.15 L15.39 18.80 L14.41 19.21 L13.19 19.51 L13.15 22.13 L10.85 22.13 L10.81 19.51 L9.59 19.21 L8.61 18.80 L7.53 18.15 L5.65 19.98 L4.02 18.35 L5.85 16.47 L5.20 15.39 L4.79 14.41 L4.49 13.19 L1.87 13.15 L1.87 10.85 L4.49 10.81 L4.79 9.59 L5.20 8.61 L5.85 7.53 L4.02 5.65 L5.65 4.02 L7.53 5.85 L8.61 5.20 L9.59 4.79 L10.81 4.49 L10.85 1.87 L13.15 1.87 L13.19 4.49 L14.41 4.79 L15.39 5.20 L16.47 5.85 L18.35 4.02 L19.98 5.65 L18.15 7.53 L18.80 8.61Z"/><circle cx="12" cy="12" r="3"/></svg>`,
+  info: `<svg ${SVG}><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle cx="12" cy="7.5" r="1.2" fill="currentColor" stroke="none"/></svg>`,
   grip: `<svg ${SVG}><g fill="currentColor" stroke="none"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></g></svg>`,
 };
 
@@ -127,17 +128,26 @@ function render(next) {
   renderSounds();
   renderHear();
   renderHotkeys();
+  renderSetup();
 }
 
 // ---------------------------------------------------------------- output
 
-async function loadOutputs() {
+let devices = { inputs: [], outputs: [] };
+let devicesLoaded = false;
+
+/** Loads the device lists (for Output and the setup check). `quiet` skips
+ * the error toast for background refreshes. */
+async function loadDevices(quiet = false) {
   try {
-    outputs = (await api("GET", "/api/devices")).outputs;
+    devices = await api("GET", "/api/devices");
+    outputs = devices.outputs;
+    devicesLoaded = true;
   } catch (e) {
-    toast(e.message);
+    if (!quiet) toast(e.message);
   }
   renderOutput();
+  renderSetup();
 }
 
 function renderOutput() {
@@ -160,16 +170,6 @@ function renderOutput() {
   const status = $("#out-status");
   status.className = `status ${state.output_status.state}`;
   status.textContent = state.output_status.state === "running" ? "Running" : state.output_status.message;
-
-  const hint = $("#output-hint");
-  const cable = outputs.find((d) => /cable input/i.test(d.name));
-  if (current && /cable input/i.test(current.name)) {
-    hint.innerHTML = "In Discord, open <b>Settings → Voice &amp; Video</b> and set the input device to <b>CABLE Output (VB-Audio Virtual Cable)</b>.";
-  } else if (!cable && state.platform_supported) {
-    hint.innerHTML = 'Install the free <a href="https://vb-audio.com/Cable/" target="_blank" rel="noreferrer">VB-Audio Virtual Cable</a>, then pick <b>CABLE Input</b> here. Other apps then use <b>CABLE Output</b> as their microphone.';
-  } else {
-    hint.innerHTML = "Pick the playback side of a virtual cable (e.g. <b>CABLE Input</b>). Other apps then select its recording side (<b>CABLE Output</b>) as their microphone. Don't send the mix to your speakers if one of the sources is an app you're listening to.";
-  }
 }
 
 $("#output").addEventListener("change", (e) => {
@@ -178,7 +178,7 @@ $("#output").addEventListener("change", (e) => {
   attempt(api("PUT", "/api/output", { device: dev ? { id: dev.id, name: dev.name } : null }));
   e.target.blur();
 });
-$("#refresh-outputs").addEventListener("click", loadOutputs);
+$("#refresh-outputs").addEventListener("click", () => loadDevices());
 
 // ---------------------------------------------------------------- strips
 
@@ -492,6 +492,10 @@ function updateMeters(meters) {
     setMeter(strip.parts.mask, m.peak);
     strip.el.classList.toggle("gated", !m.open);
   }
+  const now = Date.now();
+  for (const [id, m] of Object.entries(meters)) {
+    if (m.mic_input > SILENT) heardAt.set(id, now);
+  }
   const mic = micDialogId && meters[micDialogId];
   if (mic && mic.mic_level !== undefined) {
     setMeter($("#mic-dialog .mic-meter .meter-mask"), mic.mic_level);
@@ -500,6 +504,176 @@ function updateMeters(meters) {
     state.className = `gate-state ${mic.mic_gate_open ? "open" : "closed"}`;
   }
 }
+
+// ---------------------------------------------------------------- info and help
+
+/** The (i) buttons next to panel headings toggle a short explanation. */
+for (const btn of document.querySelectorAll(".info")) {
+  btn.innerHTML = ICONS.info;
+  const pop = document.getElementById(btn.getAttribute("aria-controls"));
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const open = pop.hidden;
+    closeInfo();
+    pop.hidden = !open;
+    btn.setAttribute("aria-expanded", String(open));
+  });
+}
+
+function closeInfo(except) {
+  for (const btn of document.querySelectorAll(".info[aria-expanded=true]")) {
+    const pop = document.getElementById(btn.getAttribute("aria-controls"));
+    if (pop === except) continue;
+    pop.hidden = true;
+    btn.setAttribute("aria-expanded", "false");
+  }
+}
+
+// Clicking elsewhere or pressing Esc closes an open explanation.
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".info-pop")) closeInfo();
+});
+document.addEventListener("keydown", (e) => {
+  const open = document.querySelector(".info[aria-expanded=true]");
+  if (e.key === "Escape" && open) {
+    closeInfo();
+    open.focus();
+  }
+});
+
+function openHelp(section) {
+  closeInfo();
+  for (const d of document.querySelectorAll("dialog[open]")) if (d.id !== "help-dialog") d.close();
+  const dialog = $("#help-dialog");
+  if (!dialog.open) dialog.showModal();
+  const target = section && document.getElementById(section);
+  if (target) target.scrollIntoView({ block: "start" });
+}
+
+$("#help-btn").addEventListener("click", () => openHelp());
+$("#help-close").addEventListener("click", () => $("#help-dialog").close());
+// "More in Help" links, and links between help sections.
+document.addEventListener("click", (e) => {
+  const link = e.target.closest("[data-help], #help-dialog a[href^='#help-']");
+  if (!link) return;
+  e.preventDefault();
+  openHelp(link.dataset.help || link.getAttribute("href").slice(1));
+});
+
+// ---------------------------------------------------------------- setup check
+
+/** Below this (dBFS) the raw input counts as silence: a muted or dead mic
+ * gives digital zeros, while a live one always picks up some room noise. */
+const SILENT = 10 ** (-90 / 20);
+const QUIET_MS = 10000;
+const heardAt = new Map(); // mic source id -> when it last picked up sound
+const runningSince = new Map(); // mic source id -> when we first saw it running
+
+const isCable = (name) => /cable|voicemeeter|virtual/i.test(name);
+/** The recording end of the cable `output` plays into ("X Output" for "X Input"). */
+const feedsBack = (input, output) => /output/i.test(input) && input.toLowerCase().replace("output", "input") === output.toLowerCase();
+
+/** Everything worth checking, each { level: ok|info|pending|warn|error,
+ * title, detail, fix?: { label, run }, help? }. */
+function setupChecks() {
+  if (!state || !devicesLoaded) return [];
+  const checks = [];
+  const add = (level, title, detail, extra = {}) => checks.push({ level, title, detail, ...extra });
+  const now = Date.now();
+
+  const cables = devices.outputs.filter((d) => isCable(d.name));
+  const cable = cables.find((d) => /cable input/i.test(d.name)) || cables[0];
+  const useCable = cable && {
+    label: `Send the mix to ${cable.name}`,
+    run: () => api("PUT", "/api/output", { device: { id: cable.id, name: cable.name } }),
+  };
+  if (cable) add("ok", "Virtual cable installed", cable.name);
+  else add("error", "No virtual cable found", "Install one, such as the free VB-Audio Virtual Cable, then restart your PC.", { help: "help-start" });
+
+  const out = state.output;
+  if (!out) add("error", "The mix isn't going anywhere", "Choose where to send it in Output.", { fix: useCable, help: "help-start" });
+  else if (state.output_status.state === "error") add("error", `Can't play the mix on ${out.name}`, state.output_status.message, { help: "help-trouble" });
+  else if (!isCable(out.name)) add("warn", `The mix goes to ${out.name}`, "That isn't a virtual cable, so other apps can't use the mix as a microphone.", { fix: useCable, help: "help-start" });
+  else add("ok", "The mix goes to the virtual cable", out.name);
+
+  const defOut = devices.outputs.find((d) => d.is_default);
+  if (defOut && out && defOut.id === out.id) {
+    add("warn", "Your Windows default output is the cable", "Everything your PC plays goes into the mic, and you won't hear it. Set your speakers or headphones as the default output in Windows' sound settings.", { help: "help-trouble" });
+  }
+  const defIn = devices.inputs.find((d) => d.is_default);
+  if (defIn && out && feedsBack(defIn.name, out.name)) {
+    add("warn", "Your Windows default microphone is the cable", `“${defIn.name}” records the mix itself, so apps using the default microphone hear the mix, and “Default microphone” sources can't hear you. Set your real microphone as the default in Windows' sound settings.`, { help: "help-trouble" });
+  }
+
+  const mics = state.sources.filter((s) => s.kind === "device");
+  if (!mics.length) {
+    add("warn", "No microphone in the mix", "Add your microphone so others hear you.", {
+      fix: { label: "Add your default microphone", run: () => api("POST", "/api/sources", { kind: "device", device: null }) },
+    });
+  }
+  for (const m of mics) {
+    if (m.status.state !== "running") runningSince.delete(m.id);
+    else if (!runningSince.has(m.id)) runningSince.set(m.id, now);
+    const since = runningSince.get(m.id);
+    if (m.status.state === "error") add("error", `${m.name} isn't working`, m.status.message, { help: "help-trouble" });
+    else if (!since) add("pending", `${m.name} is starting`, m.status.message);
+    else if (now - (heardAt.get(m.id) || 0) < QUIET_MS) add("ok", `${m.name} is picking up sound`, m.status.message + (m.muted ? " (muted on its card)" : ""));
+    else if (now - since < QUIET_MS) add("pending", `Listening to ${m.name}…`, "Say something.");
+    else add("warn", `No sound from ${m.name}`, "It hasn't picked anything up for 10 seconds. Check it isn't muted in Windows or on the mic itself, and that it's the right device.", { help: "help-trouble" });
+  }
+  for (const s of state.sources) {
+    if (s.kind !== "device" && s.status.state === "error") add("warn", `${s.name} isn't working`, s.status.message);
+  }
+  if (state.hear_status.state === "error") add("warn", "Hear sounds can't play", state.hear_status.message, { help: "help-trouble" });
+  if (state.monitor.state === "error") add("warn", "Listen can't play", state.monitor.message, { help: "help-trouble" });
+  return checks;
+}
+
+const LEVELS = ["ok", "info", "pending", "warn", "error"];
+let lastSetup = "";
+let setupFixes = [];
+
+function renderSetup() {
+  const checks = setupChecks();
+  const worst = checks.reduce((w, c) => (LEVELS.indexOf(c.level) > LEVELS.indexOf(w) ? c.level : w), "ok");
+  const btn = $("#setup-btn");
+  btn.dataset.level = checks.length ? worst : "";
+  const problems = checks.filter((c) => c.level === "warn" || c.level === "error").length;
+  btn.setAttribute("aria-label", `Setup check: ${problems ? `${problems} to look at` : "all good"}`);
+
+  const errors = checks.filter((c) => c.level === "error");
+  $("#setup-banner").hidden = !errors.length;
+  if (errors.length) $("#setup-banner-text").textContent = `Setup: ${errors[0].title}.${errors.length > 1 ? ` (+${errors.length - 1} more)` : ""}`;
+
+  // Only rebuild the list when it changed, so focus on its buttons stays.
+  const signature = JSON.stringify(checks.map(({ fix, ...c }) => ({ ...c, fix: fix && fix.label })));
+  if (signature === lastSetup) return;
+  lastSetup = signature;
+  setupFixes = checks.map((c) => c.fix);
+  const order = (c) => -LEVELS.indexOf(c.level);
+  const sorted = checks.map((c, i) => ({ c, i })).sort((a, b) => order(a.c) - order(b.c));
+  $("#setup-list").replaceChildren(...sorted.map(({ c, i }) => {
+    const actions = el("div", { className: "check-actions" });
+    if (c.fix) {
+      const fix = el("button", { type: "button", className: "primary", textContent: c.fix.label });
+      fix.addEventListener("click", () => attempt(setupFixes[i].run().then(() => loadDevices(true))));
+      actions.append(fix);
+    }
+    if (c.help) actions.append(el("button", { type: "button", className: "link", textContent: "How to fix", "data-help": c.help }));
+    return el("li", { className: `check ${c.level}` },
+      el("span", { className: "check-icon", "aria-hidden": "true" }),
+      el("div", {}, el("b", { textContent: c.title }), el("p", { textContent: c.detail }), ...(actions.children.length ? [actions] : [])));
+  }));
+}
+
+$("#setup-btn").addEventListener("click", () => {
+  loadDevices(true);
+  $("#setup-dialog").showModal();
+});
+$("#setup-banner-open").addEventListener("click", () => $("#setup-btn").click());
+$("#setup-close").addEventListener("click", () => $("#setup-dialog").close());
+// Pending checks (e.g. listening for the mic) move on with time.
+setInterval(renderSetup, 1000);
 
 // ---------------------------------------------------------------- mic processing
 
@@ -531,7 +705,7 @@ function renderMicDialog() {
   $("#mic-threshold").hidden = $("#mic-threshold-value").hidden = $("#mic-threshold-mark").hidden = !manual;
   $("#mic-gate-hint").textContent = manual
     ? "The meter shows your mic. Set the line just above where it sits while you're quiet."
-    : "Opens when it hears speech that's louder than the background noise, like Discord's automatic sensitivity. If it misses quiet speech, use a level instead.";
+    : "Opens when it hears speech that's louder than the background noise. If it misses quiet speech, use a level instead.";
   if (document.activeElement !== $("#mic-threshold")) showThreshold(src.gate_db);
 }
 
@@ -702,13 +876,14 @@ function renderSounds() {
   const inMix = state.sources.some((s) => s.kind === "soundboard");
   let hint;
   if (uploading) hint = `Adding sounds… ${uploading.done} of ${uploading.total} done`;
-  else if (!state.sounds.length) hint = "Add MP3, WAV, OGG, FLAC or M4A files up to 60 seconds long, or drop them here. Then click a sound to play it into the mix.";
+  else if (!state.sounds.length) hint = "No sounds yet. Add some with + Add sounds, or drop audio files here.";
   else if (!inMix) hint = "The soundboard isn't in the mix, so nobody hears it. ";
-  else hint = `Click a sound to play it into the mix (again to restart it).${state.hear_sounds ? "" : " Turn on 🎧 Hear sounds to hear them yourself."}`;
+  else hint = "";
   // Only touch the hint when it changes, so a focused "Add it back" survives
   // unrelated state updates.
   if (hint !== lastHint) {
     lastHint = hint;
+    $("#sb-hint").hidden = !hint;
     $("#sb-hint").replaceChildren(hint, ...(!uploading && state.sounds.length && !inMix ? [addBack] : []));
   }
 
@@ -1164,5 +1339,7 @@ $("#quit").addEventListener("click", () => {
   }));
 });
 
-loadOutputs();
+loadDevices();
+// Pick up devices plugged in or defaults changed in Windows meanwhile.
+setInterval(() => document.visibilityState === "visible" && loadDevices(true), 15000);
 connect();
