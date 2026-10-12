@@ -17,24 +17,20 @@ use std::sync::Arc;
 fn main() -> anyhow::Result<()> {
     let background = std::env::args().any(|a| a == "--background");
     let verbose = std::env::args().any(|a| a == "--verbose");
-    init_logging(verbose);
-    tracing::info!(
-        "Virtual Audio Mixer {} starting, args: {:?}",
-        env!("CARGO_PKG_VERSION"),
-        std::env::args().skip(1).collect::<Vec<_>>()
-    );
 
-    let first_run = !config::data_dir().join("config.json").exists();
-    let mut config = Config::load();
-    let port = config.port;
+    let loaded = Config::read();
+    let port = match &loaded {
+        Ok(Some(config)) => config.port,
+        _ => config::DEFAULT_PORT,
+    };
     let url = format!("http://127.0.0.1:{port}/");
 
     // The port doubles as a single-instance lock: if it is taken, another
-    // copy is running, so just show its UI.
+    // copy is running, so just show its UI. This happens before logging is
+    // set up so a second launch doesn't rotate the running copy's log.
     let listener = match std::net::TcpListener::bind(("127.0.0.1", port)) {
         Ok(l) => l,
-        Err(e) => {
-            tracing::info!("port {port} busy ({e}), assuming already running");
+        Err(_) => {
             if !background {
                 platform::shell_open(&url);
             }
@@ -42,6 +38,29 @@ fn main() -> anyhow::Result<()> {
         }
     };
     listener.set_nonblocking(true)?;
+
+    init_logging(verbose);
+    tracing::info!(
+        "Virtual Audio Mixer {} starting, args: {:?}",
+        env!("CARGO_PKG_VERSION"),
+        std::env::args().skip(1).collect::<Vec<_>>()
+    );
+    let (mut config, first_run) = match loaded {
+        Ok(Some(config)) => (config, false),
+        Ok(None) => (Config::default(), true),
+        Err(e) => {
+            match Config::back_up_unreadable() {
+                Ok(backup) => tracing::error!(
+                    "config.json is unreadable ({e}); moved it to {} and started fresh",
+                    backup.display()
+                ),
+                Err(io) => tracing::error!(
+                    "config.json is unreadable ({e}) and could not be backed up: {io}"
+                ),
+            }
+            (Config::default(), true)
+        }
+    };
 
     let backend = backend::create();
     if first_run {
