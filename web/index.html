@@ -37,7 +37,7 @@
   <main>
     <section class="panel output-panel" aria-labelledby="out-h">
       <div class="panel-head">
-        <div class="panel-title"><h2 id="out-h">Output</h2><button type="button" class="info" aria-expanded="false" aria-controls="out-info" aria-label="About the output" title="About the output"></button></div>
+        <div class="panel-title"><h2 id="out-h">Output</h2><button type="button" class="info" data-icon="info" aria-expanded="false" aria-controls="out-info" aria-label="About the output" title="About the output"></button></div>
         <span id="out-status" class="status"></span>
       </div>
       <div class="info-pop" id="out-info" hidden>
@@ -48,13 +48,13 @@
       <div class="output-row">
         <label for="output">Send the mix to</label>
         <select id="output"></select>
-        <button id="refresh-outputs" class="ghost icon refresh" title="Refresh device list" aria-label="Refresh device list"></button>
+        <button id="refresh-outputs" class="ghost icon" data-icon="refresh" title="Refresh device list" aria-label="Refresh device list"></button>
       </div>
     </section>
 
     <section class="panel" aria-labelledby="mix-h">
       <div class="panel-head">
-        <div class="panel-title"><h2 id="mix-h">Mixer</h2><button type="button" class="info" aria-expanded="false" aria-controls="mix-info" aria-label="About the mixer" title="About the mixer"></button></div>
+        <div class="panel-title"><h2 id="mix-h">Mixer</h2><button type="button" class="info" data-icon="info" aria-expanded="false" aria-controls="mix-info" aria-label="About the mixer" title="About the mixer"></button></div>
         <button id="add-source" class="primary">+ Add source</button>
       </div>
       <div class="info-pop" id="mix-info" hidden>
@@ -72,7 +72,7 @@
 
     <section class="panel" id="soundboard" aria-labelledby="sb-h">
       <div class="panel-head">
-        <div class="panel-title"><h2 id="sb-h">Soundboard</h2><button type="button" class="info" aria-expanded="false" aria-controls="sb-info" aria-label="About the soundboard" title="About the soundboard"></button></div>
+        <div class="panel-title"><h2 id="sb-h">Soundboard</h2><button type="button" class="info" data-icon="info" aria-expanded="false" aria-controls="sb-info" aria-label="About the soundboard" title="About the soundboard"></button></div>
         <div class="panel-actions">
           <button id="hear-sounds" class="ghost listen" aria-pressed="false"
             title="Also play the soundboard on your Windows default output (use headphones), so you hear your own sounds">🎧 Hear sounds</button>
@@ -102,7 +102,7 @@
 
     <section class="panel" aria-labelledby="hk-h">
       <div class="panel-head">
-        <div class="panel-title"><h2 id="hk-h">Hotkeys</h2><button type="button" class="info" aria-expanded="false" aria-controls="hk-info" aria-label="About hotkeys" title="About hotkeys"></button></div>
+        <div class="panel-title"><h2 id="hk-h">Hotkeys</h2><button type="button" class="info" data-icon="info" aria-expanded="false" aria-controls="hk-info" aria-label="About hotkeys" title="About hotkeys"></button></div>
         <button id="add-hotkey" class="ghost">+ Add hotkey</button>
       </div>
       <div class="info-pop" id="hk-info" hidden>
@@ -120,10 +120,10 @@
   <template id="strip-tpl">
     <article class="strip">
       <div class="strip-head">
-        <button class="ghost icon handle" title="Drag to reorder, or focus and use the arrow keys" aria-label="Reorder source"></button>
+        <button class="ghost icon handle" data-icon="grip" title="Drag to reorder, or focus and use the arrow keys" aria-label="Reorder source"></button>
         <span class="kind-icon" aria-hidden="true"></span>
         <input class="name" aria-label="Source name" spellcheck="false">
-        <button class="ghost icon remove" title="Remove source" aria-label="Remove source">✕</button>
+        <button class="ghost icon remove" data-icon="close" title="Remove source" aria-label="Remove source"></button>
       </div>
       <div class="detail"></div>
       <div class="status"></div>
@@ -137,7 +137,7 @@
         <button class="listen" aria-pressed="false" hidden
           title="Hear the final mix on your Windows default output (use headphones). Turns off when you close this page.">🎧 Listen</button>
         <span class="gate" title="Silenced by a push-to-talk / push-to-mute hotkey">PTT</span>
-        <button class="ghost icon settings" hidden title="Mic processing: noise suppression and noise gate"></button>
+        <button class="ghost icon settings" data-icon="cog" hidden title="Mic processing: noise suppression and noise gate"></button>
       </div>
       <div class="status monitor-status" hidden></div>
     </article>
@@ -152,7 +152,7 @@
       </div>
       <div class="tab-panel" data-panel="app">
         <p class="hint">Captures everything an app plays (including its child processes), e.g. Chrome or a soundboard. The app keeps playing to your speakers too.</p>
-        <div class="list-head"><span>Apps playing audio</span><button type="button" id="refresh-apps" class="ghost icon refresh" title="Refresh" aria-label="Refresh apps"></button></div>
+        <div class="list-head"><span>Apps playing audio</span><button type="button" id="refresh-apps" class="ghost icon" data-icon="refresh" title="Refresh" aria-label="Refresh apps"></button></div>
         <ul id="app-list" class="pick-list"></ul>
         <label class="field">Or type an executable name
           <input id="exe-input" placeholder="e.g. Soundpad.exe" spellcheck="false">
@@ -235,7 +235,7 @@
     <div class="dialog-body">
       <div class="help-head">
         <h2 id="help-h">Help</h2>
-        <button type="button" class="ghost icon" id="help-close" aria-label="Close help">✕</button>
+        <button type="button" class="ghost icon" data-icon="close" id="help-close" aria-label="Close help"></button>
       </div>
       <nav class="help-nav" aria-label="Help topics">
         <a href="#help-start">Getting started</a>
