@@ -141,6 +141,11 @@ function render(next) {
   $("#demo-banner").hidden = state.platform_supported;
   $("#autostart-wrap").hidden = !state.platform_supported;
   $("#autostart").checked = state.autostart;
+  $("#autostart-admin-wrap").hidden = !state.platform_supported || !state.autostart;
+  if (!adminPending) $("#autostart-admin").checked = state.autostart_admin;
+  $("#elevation-note").textContent = state.elevated
+    ? "The mixer is running as administrator, so hotkeys also work while apps running as administrator are focused."
+    : "Hotkeys can't see keys while an app running as administrator (some games) is focused. Turn on Start with Windows → as administrator, or run the mixer as administrator, to fix that.";
   renderOutput();
   renderStrips();
   renderMicDialog();
@@ -1431,12 +1436,34 @@ $("#add-hotkey").addEventListener("click", () => {
 
 // ---------------------------------------------------------------- settings
 
-$("#autostart").addEventListener("change", (e) => {
-  api("PUT", "/api/settings", { autostart: e.target.checked }).catch((err) => {
-    e.target.checked = !e.target.checked;
+let adminPending = false; // waiting for the UAC prompt to be answered
+
+/** Saves Start with Windows settings. Changing "as administrator" (or
+ * turning autostart off while it's on) makes Windows ask for permission,
+ * and the request waits until that's answered. */
+async function saveAutostart(body, input) {
+  const admin = body.autostart_admin !== undefined || (body.autostart === false && state.autostart_admin);
+  if (admin) {
+    adminPending = true;
+    $("#autostart-admin").disabled = $("#autostart").disabled = true;
+    $("#autostart-admin-label").textContent = "as administrator (answer the Windows prompt…)";
+  }
+  try {
+    await api("PUT", "/api/settings", body);
+  } catch (err) {
+    input.checked = !input.checked;
     toast(err.message);
-  });
-});
+  } finally {
+    if (admin) {
+      adminPending = false;
+      $("#autostart-admin").disabled = $("#autostart").disabled = false;
+      $("#autostart-admin-label").textContent = "as administrator";
+    }
+  }
+}
+
+$("#autostart").addEventListener("change", (e) => saveAutostart({ autostart: e.target.checked }, e.target));
+$("#autostart-admin").addEventListener("change", (e) => saveAutostart({ autostart: true, autostart_admin: e.target.checked }, e.target));
 
 $("#quit").addEventListener("click", () => {
   if (!confirm("Stop the mixer? Apps using the virtual mic will hear silence.")) return;
