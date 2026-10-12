@@ -105,15 +105,28 @@ fn config_path() -> PathBuf {
 }
 
 impl Config {
-    pub fn load() -> Self {
-        let path = config_path();
-        match std::fs::read_to_string(&path) {
-            Ok(text) => serde_json::from_str(&text).unwrap_or_else(|e| {
-                tracing::warn!("ignoring unreadable config {}: {e}", path.display());
-                Config::default()
-            }),
-            Err(_) => Config::default(),
+    /// Reads the saved config: `Ok(None)` if there is none yet, `Err` if it
+    /// exists but can't be read or parsed.
+    pub fn read() -> Result<Option<Self>, String> {
+        match std::fs::read_to_string(config_path()) {
+            Ok(text) => Self::parse(&text).map(Some),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.to_string()),
         }
+    }
+
+    fn parse(text: &str) -> Result<Self, String> {
+        // Notepad and friends may add a UTF-8 byte order mark.
+        serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())
+    }
+
+    /// Moves an unreadable config aside (to `config.json.bad`) so starting
+    /// over with defaults doesn't overwrite what the user may want back.
+    pub fn back_up_unreadable() -> std::io::Result<PathBuf> {
+        let path = config_path();
+        let backup = path.with_extension("json.bad");
+        std::fs::rename(&path, &backup)?;
+        Ok(backup)
     }
 
     pub fn save(&self) -> anyhow::Result<()> {
@@ -170,6 +183,14 @@ mod tests {
         assert_eq!(json["gain_db"], -3.0);
         let back: SourceConfig = serde_json::from_value(json).unwrap();
         assert_eq!(back.kind, s.kind);
+    }
+
+    #[test]
+    fn parses_with_bom_and_rejects_garbage() {
+        let cfg = Config::parse("\u{feff}{\"port\": 1234}").unwrap();
+        assert_eq!(cfg.port, 1234);
+        assert!(cfg.sources.is_empty(), "missing fields default");
+        assert!(Config::parse("{\"sources\": [{\"name\": 1}]}").is_err());
     }
 
     #[test]
