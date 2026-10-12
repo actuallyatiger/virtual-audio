@@ -42,7 +42,7 @@
       </div>
       <div class="info-pop" id="out-info" hidden>
         <p>The mix goes to the playback side of a virtual audio cable (for VB-CABLE, <b>CABLE Input</b>). Other apps then choose the cable's recording side (<b>CABLE Output</b>) as their microphone, and hear the whole mix.</p>
-        <p>Don't send the mix to your speakers or headphones. To hear it yourself, use <b>🎧 Listen</b> on Master.</p>
+        <p>Don't send the mix to your speakers or headphones. To hear it yourself, use <b>Listen</b> on Master.</p>
         <button type="button" class="link" data-help="help-start">More in Help</button>
       </div>
       <div class="output-row">
@@ -55,7 +55,7 @@
     <section class="panel" aria-labelledby="mix-h">
       <div class="panel-head">
         <div class="panel-title"><h2 id="mix-h">Mixer</h2><button type="button" class="info" data-icon="info" aria-expanded="false" aria-controls="mix-info" aria-label="About the mixer" title="About the mixer"></button></div>
-        <button id="add-source" class="primary">+ Add source</button>
+        <button id="add-source" class="primary with-icon"><span data-icon="plus" aria-hidden="true"></span>Add source</button>
       </div>
       <div class="info-pop" id="mix-info" hidden>
         <ul>
@@ -63,7 +63,7 @@
           <li>Drag a volume slider, or click its dB value to type one. Double-click a slider to reset it to 0 dB.</li>
           <li>Drag a card by its handle, or focus the handle and use the arrow keys, to reorder.</li>
           <li>Microphone cards have a ⚙ for noise suppression and the noise gate.</li>
-          <li><b>🎧 Listen</b> on Master plays the final mix on your Windows default output, so you can check what others hear (with about 100 ms delay).</li>
+          <li><b>Listen</b> on Master plays the final mix on your Windows default output, so you can check what others hear (with about 100 ms delay).</li>
         </ul>
         <button type="button" class="link" data-help="help-sources">More in Help</button>
       </div>
@@ -74,19 +74,19 @@
       <div class="panel-head">
         <div class="panel-title"><h2 id="sb-h">Soundboard</h2><button type="button" class="info" data-icon="info" aria-expanded="false" aria-controls="sb-info" aria-label="About the soundboard" title="About the soundboard"></button></div>
         <div class="panel-actions">
-          <button id="hear-sounds" class="ghost listen" aria-pressed="false"
-            title="Also play the soundboard on your Windows default output (use headphones), so you hear your own sounds">🎧 Hear sounds</button>
-          <button id="stop-sounds" class="ghost" disabled>■ Stop all</button>
-          <button id="add-sound" class="primary">+ Add sounds</button>
+          <button id="hear-sounds" class="ghost listen with-icon" aria-pressed="false"
+            title="Also play the soundboard on your Windows default output (use headphones), so you hear your own sounds"><span data-icon="headphones" aria-hidden="true"></span>Hear sounds</button>
+          <button id="stop-sounds" class="ghost with-icon" disabled><span data-icon="stop" aria-hidden="true"></span>Stop all</button>
+          <button id="add-sound" class="primary with-icon"><span data-icon="plus" aria-hidden="true"></span>Add sounds</button>
           <input type="file" id="sound-files" accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a" multiple hidden>
         </div>
       </div>
       <div class="info-pop" id="sb-info" hidden>
         <ul>
           <li>Click a sound to play it into the mix. Clicking it again restarts it.</li>
-          <li>Add MP3, WAV, OGG, FLAC or M4A files up to 60 seconds long with <b>+ Add sounds</b>, or drop them on the soundboard.</li>
+          <li>Add MP3, WAV, OGG, FLAC or M4A files up to 60 seconds long with <b>Add sounds</b>, or drop them on the soundboard.</li>
           <li>A sound's ⚙ renames it, sets its volume or deletes it. Drag sounds to reorder them, or focus one and press Alt+← or Alt+→.</li>
-          <li><b>🎧 Hear sounds</b> also plays them on your Windows default output at <b>Your volume</b>, so you hear them without hearing your own voice.</li>
+          <li><b>Hear sounds</b> also plays them on your Windows default output at <b>Your volume</b>, so you hear them without hearing your own voice.</li>
         </ul>
         <button type="button" class="link" data-help="help-soundboard">More in Help</button>
       </div>
@@ -103,7 +103,7 @@
     <section class="panel" aria-labelledby="hk-h">
       <div class="panel-head">
         <div class="panel-title"><h2 id="hk-h">Hotkeys</h2><button type="button" class="info" data-icon="info" aria-expanded="false" aria-controls="hk-info" aria-label="About hotkeys" title="About hotkeys"></button></div>
-        <button id="add-hotkey" class="ghost">+ Add hotkey</button>
+        <button id="add-hotkey" class="ghost with-icon"><span data-icon="plus" aria-hidden="true"></span>Add hotkey</button>
       </div>
       <div class="info-pop" id="hk-info" hidden>
         <ul>
@@ -134,8 +134,8 @@
       </div>
       <div class="strip-actions">
         <button class="mute">Mute</button>
-        <button class="listen" aria-pressed="false" hidden
-          title="Hear the final mix on your Windows default output (use headphones). Turns off when you close this page.">🎧 Listen</button>
+        <button class="listen with-icon" aria-pressed="false" hidden
+          title="Hear the final mix on your Windows default output (use headphones). Turns off when you close this page."><span data-icon="headphones" aria-hidden="true"></span><span class="label">Listen</span></button>
         <span class="gate" title="Silenced by a push-to-talk / push-to-mute hotkey">PTT</span>
         <button class="ghost icon settings" data-icon="cog" hidden title="Mic processing: noise suppression and noise gate"></button>
       </div>
@@ -183,7 +183,7 @@
       <div class="dialog-actions">
         <button type="button" id="sound-delete" class="ghost danger">Delete</button>
         <span class="spacer"></span>
-        <button type="button" id="sound-preview" class="ghost">▶ Play</button>
+        <button type="button" id="sound-preview" class="ghost with-icon"><span data-icon="play" aria-hidden="true"></span>Play</button>
         <button id="sound-done" class="primary">Done</button>
       </div>
     </form>
@@ -252,7 +252,7 @@
           <ol>
             <li>Install a virtual audio cable, such as the free <a href="https://vb-audio.com/Cable/" target="_blank" rel="noreferrer">VB-Audio Virtual Cable</a>, and restart your PC.</li>
             <li>In <b>Output</b>, send the mix to the cable's playback side (<b>CABLE Input</b>). It's picked automatically the first time if the cable is installed.</li>
-            <li>Your default microphone is added for you. Use <b>+ Add source</b> for apps (e.g. a browser or music player) or other inputs, and <b>+ Add sounds</b> for the soundboard.</li>
+            <li>Your default microphone is added for you. Use <b>Add source</b> for apps (e.g. a browser or music player) or other inputs, and <b>Add sounds</b> for the soundboard.</li>
             <li>In the app you talk in, choose the cable's recording side (<b>CABLE Output</b>) as the microphone. See <a href="#help-apps">Using the mic in other apps</a>.</li>
           </ol>
           <p><b>Setup check</b> in the top bar checks all of this and offers fixes.</p>
@@ -282,7 +282,7 @@
             <li><b>Apps</b> capture everything an app plays, including its child processes (all of a browser's tabs). The app keeps playing to your speakers too. Apps are matched by name, so capture resumes when the app restarts. Windows can only capture whole apps, not single windows or tabs.</li>
             <li><b>Microphones and inputs</b>: pick a device, or <i>Default microphone</i>, which follows your Windows default. Capturing the cable's own recording side would loop the mix into itself, so that's refused.</li>
             <li><b>Master</b> sets the level of the whole mix. A limiter stops the sum from clipping harshly.</li>
-            <li><b>🎧 Listen</b> plays the final mix on your Windows default output (use headphones) to check what others hear. It's shared by every open mixer page and turns off when the last page that turned it on closes.</li>
+            <li><b>Listen</b> plays the final mix on your Windows default output (use headphones) to check what others hear. It's shared by every open mixer page and turns off when the last page that turned it on closes.</li>
           </ul>
         </section>
 
@@ -299,11 +299,11 @@
         <section id="help-soundboard">
           <h3>Soundboard</h3>
           <ul>
-            <li>Add MP3, WAV, OGG, FLAC or M4A files (up to 60 seconds and 20 MB each, 64 sounds) with <b>+ Add sounds</b> or by dropping them on the soundboard.</li>
+            <li>Add MP3, WAV, OGG, FLAC or M4A files (up to 60 seconds and 20 MB each, 64 sounds) with <b>Add sounds</b> or by dropping them on the soundboard.</li>
             <li>Click a sound to play it; clicking it again restarts it. <b>Stop all</b> stops everything. A sound's ⚙ renames it, sets its own volume or deletes it.</li>
             <li>Drag sounds to reorder them, or focus one and press Alt+← or Alt+→.</li>
             <li>The soundboard is also a card in the mixer, with its own volume, mute and hotkeys. If you remove that card, the soundboard offers to add it back.</li>
-            <li><b>🎧 Hear sounds</b> plays the soundboard on your Windows default output at <b>Your volume</b>, so you hear your sounds without hearing your own voice. It pauses while Listen is on, as Listen already includes them.</li>
+            <li><b>Hear sounds</b> plays the soundboard on your Windows default output at <b>Your volume</b>, so you hear your sounds without hearing your own voice. It pauses while Listen is on, as Listen already includes them.</li>
           </ul>
         </section>
 
