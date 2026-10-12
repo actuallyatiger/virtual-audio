@@ -1846,7 +1846,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(names(&engine), ["b", "a"]);
-        assert!(engine.reorder_sounds(&[b.clone()]).is_err());
+        assert!(engine.reorder_sounds(std::slice::from_ref(&b)).is_err());
         assert!(engine.reorder_sounds(&[b.clone(), b.clone()]).is_err());
         assert_eq!(names(&engine), ["b", "a"], "rejected orders change nothing");
         engine.shutdown();
