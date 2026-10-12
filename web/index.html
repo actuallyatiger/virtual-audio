@@ -83,7 +83,7 @@
   <template id="strip-tpl">
     <article class="strip">
       <div class="strip-head">
-        <button class="ghost icon handle" title="Drag to reorder, or focus and use the arrow keys" aria-label="Reorder source">⠿</button>
+        <button class="ghost icon handle" title="Drag to reorder, or focus and use the arrow keys" aria-label="Reorder source"></button>
         <span class="kind-icon" aria-hidden="true"></span>
         <input class="name" aria-label="Source name" spellcheck="false">
         <button class="ghost icon remove" title="Remove source" aria-label="Remove source">✕</button>
@@ -100,21 +100,9 @@
         <button class="listen" aria-pressed="false" hidden
           title="Hear the final mix on your Windows default output (use headphones). Turns off when you close this page.">🎧 Listen</button>
         <span class="gate" title="Silenced by a push-to-talk / push-to-mute hotkey">PTT</span>
+        <button class="ghost icon settings" hidden title="Mic processing: noise suppression and noise gate"></button>
       </div>
       <div class="status monitor-status" hidden></div>
-      <details class="processing" hidden>
-        <summary>Mic processing <span class="proc-summary"></span></summary>
-        <label class="check"><input type="checkbox" class="suppress"> Noise suppression</label>
-        <p class="hint small">Removes steady background noise (fans, hum, keyboard) from your voice.</p>
-        <label class="check"><input type="checkbox" class="gate-on"> Noise gate</label>
-        <div class="gate-controls" hidden>
-          <div class="meter mic-meter" aria-hidden="true"><div class="meter-fill"></div><div class="meter-mask"></div><div class="threshold-mark"></div></div>
-          <span class="gate-state"></span>
-          <input type="range" class="threshold" min="-60" max="0" step="1">
-          <span class="threshold-value"></span>
-          <p class="hint small">Silences the mic until it's louder than the line. Set the line just above the meter when you're quiet.</p>
-        </div>
-      </details>
     </article>
   </template>
 
@@ -160,6 +148,37 @@
         <span class="spacer"></span>
         <button type="button" id="sound-preview" class="ghost">▶ Play</button>
         <button id="sound-done" class="primary">Done</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="mic-dialog">
+    <form method="dialog" class="dialog-body">
+      <h2 id="mic-title">Mic processing</h2>
+      <div>
+        <label class="check"><input type="checkbox" id="mic-suppress"> Noise suppression</label>
+        <p class="hint small">Removes steady background noise (fans, hum, keyboard clatter) from your voice.</p>
+      </div>
+      <div>
+        <label class="check"><input type="checkbox" id="mic-gate"> Noise gate</label>
+        <p class="hint small">Silences your mic while you aren't talking.</p>
+      </div>
+      <div id="mic-gate-controls" class="gate-panel">
+        <fieldset class="gate-mode">
+          <legend>Open the gate</legend>
+          <label class="check"><input type="radio" name="gate-mode" value="auto"> Automatically, when it hears your voice</label>
+          <label class="check"><input type="radio" name="gate-mode" value="manual"> Above a level I set</label>
+        </fieldset>
+        <div class="gate-controls">
+          <div class="meter mic-meter" aria-hidden="true"><div class="meter-fill"></div><div class="meter-mask"></div><div class="threshold-mark" id="mic-threshold-mark"></div></div>
+          <span class="gate-state" id="mic-gate-state"></span>
+          <input type="range" class="threshold" id="mic-threshold" min="-60" max="0" step="1" aria-label="Gate level">
+          <span class="threshold-value" id="mic-threshold-value"></span>
+          <p class="hint small" id="mic-gate-hint"></p>
+        </div>
+      </div>
+      <div class="dialog-actions">
+        <button id="mic-done" class="primary">Done</button>
       </div>
     </form>
   </dialog>

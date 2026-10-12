@@ -9,8 +9,8 @@
 
 use crate::backend::{Backend, CaptureStream, CaptureTarget, DeviceInfo, NullRender, RenderStream};
 use crate::config::{
-    Channel, Config, DeviceRef, Hotkey, HotkeyAction, Processing, SoundConfig, SourceConfig,
-    SourceKind, db_to_gain, new_id,
+    Channel, Config, DeviceRef, GateMode, Hotkey, HotkeyAction, Processing, SoundConfig,
+    SourceConfig, SourceKind, db_to_gain, new_id,
 };
 use crate::dsp::{ProcessingControl, Processor};
 use crate::mixer::{ChannelControl, Mixer, MonitorTap, push_frames, source_ring};
@@ -183,6 +183,7 @@ pub struct ChannelPatch {
     /// Microphone processing, for device sources only.
     pub noise_suppression: Option<bool>,
     pub noise_gate: Option<bool>,
+    pub gate_mode: Option<GateMode>,
     pub gate_db: Option<f32>,
 }
 
@@ -508,6 +509,7 @@ impl Engine {
         }
         let processing_patch = patch.noise_suppression.is_some()
             || patch.noise_gate.is_some()
+            || patch.gate_mode.is_some()
             || patch.gate_db.is_some();
         let mut inner = self.inner.lock().unwrap();
         let (channel, ctrl) = if id == MASTER {
@@ -540,6 +542,10 @@ impl Engine {
             if let Some(on) = patch.noise_gate {
                 src.processing.noise_gate = on;
                 processing.set_gate(on);
+            }
+            if let Some(mode) = patch.gate_mode {
+                src.processing.gate_mode = mode;
+                processing.set_gate_auto(mode == GateMode::Auto);
             }
             if let Some(db) = patch.gate_db {
                 src.processing.gate_db = db.clamp(-60.0, 0.0);
@@ -1271,6 +1277,7 @@ impl SourceRuntime {
             processing: Arc::new(ProcessingControl::new(
                 p.noise_suppression,
                 p.noise_gate,
+                p.gate_mode == GateMode::Auto,
                 p.gate_db,
             )),
             status: Arc::new(Mutex::new(Status::new("waiting", "Starting…"))),

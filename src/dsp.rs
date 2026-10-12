@@ -1,6 +1,12 @@
 //! Microphone clean-up, applied in a device source's capture thread before
 //! its audio reaches the mixer: RNNoise noise suppression and a noise gate.
 //!
+//! The gate is either manual (opens above a level you set) or automatic: it
+//! opens when RNNoise's voice detector hears speech and the level is
+//! clearly above the room's background noise. The voice detector alone is
+//! fooled by loud steady noise such as a fan, which the noise floor check
+//! rules out.
+//!
 //! While either is on, the input is downmixed to mono (microphones are mono
 //! anyway) and processed in 10 ms frames, which adds up to 10 ms of delay.
 //! With both off, audio passes through untouched.
@@ -19,12 +25,21 @@ const ATTACK_STEP: f32 = 1.0 / (SAMPLE_RATE as f32 * 0.005);
 const RELEASE_STEP: f32 = 1.0 / (SAMPLE_RATE as f32 * 0.1);
 /// RNNoise expects samples scaled like 16-bit integers.
 const I16_SCALE: f32 = 32_768.0;
+/// Automatic gate: RNNoise's voice probability needed to open.
+const VOICE_PROBABILITY: f32 = 0.6;
+/// Automatic gate: how far above the background noise speech must be.
+const FLOOR_MARGIN_DB: f32 = 6.0;
+/// The noise floor follows quieter frames at once, and creeps up 2 dB/s
+/// otherwise, so it settles on the room's steady noise but not on speech.
+const FLOOR_RISE_DB: f32 = 0.02;
 
 /// Settings and live readings shared between the UI and a capture thread.
 #[derive(Debug)]
 pub struct ProcessingControl {
     suppress: AtomicBool,
     gate: AtomicBool,
+    /// Automatic (voice detection) rather than a manual threshold.
+    gate_auto: AtomicBool,
     threshold_db: AtomicU32,
     /// Peak input level (linear, decaying) after suppression, before the gate.
     level: AtomicU32,
@@ -32,10 +47,11 @@ pub struct ProcessingControl {
 }
 
 impl ProcessingControl {
-    pub fn new(suppress: bool, gate: bool, threshold_db: f32) -> Self {
+    pub fn new(suppress: bool, gate: bool, gate_auto: bool, threshold_db: f32) -> Self {
         Self {
             suppress: AtomicBool::new(suppress),
             gate: AtomicBool::new(gate),
+            gate_auto: AtomicBool::new(gate_auto),
             threshold_db: AtomicU32::new(threshold_db.to_bits()),
             level: AtomicU32::new(0f32.to_bits()),
             gate_open: AtomicBool::new(true),
@@ -46,6 +62,9 @@ impl ProcessingControl {
     }
     pub fn set_gate(&self, on: bool) {
         self.gate.store(on, Ordering::Relaxed);
+    }
+    pub fn set_gate_auto(&self, auto: bool) {
+        self.gate_auto.store(auto, Ordering::Relaxed);
     }
     pub fn set_threshold_db(&self, db: f32) {
         self.threshold_db.store(db.to_bits(), Ordering::Relaxed);
@@ -64,12 +83,15 @@ impl ProcessingControl {
 
 pub struct Processor {
     ctrl: std::sync::Arc<ProcessingControl>,
-    /// Created when suppression is switched on, dropped when it is off so
-    /// switching it back on starts from a clean state.
+    /// Created while suppression or the automatic gate (which uses its
+    /// voice detector) needs it, dropped otherwise so turning them back on
+    /// starts from a clean state.
     denoise: Option<Box<DenoiseState<'static>>>,
     /// Mono samples waiting for a full frame.
     pending: Vec<f32>,
     frame: Vec<f32>,
+    /// Background noise level (dBFS) for the automatic gate.
+    floor_db: f32,
     out: Vec<f32>,
     gain: f32,
     hold: u32,
@@ -83,6 +105,7 @@ impl Processor {
             denoise: None,
             pending: Vec::with_capacity(FRAME),
             frame: vec![0.0; FRAME],
+            floor_db: 0.0,
             out: Vec::with_capacity(FRAME * CHANNELS),
             gain: 1.0,
             hold: 0,
@@ -123,14 +146,26 @@ impl Processor {
     }
 
     fn run_frame(&mut self, suppress: bool, gate: bool) {
-        if suppress {
+        let auto = gate && self.ctrl.gate_auto.load(Ordering::Relaxed);
+        // Input level, before suppression, for the noise floor.
+        let rms = (self.pending.iter().map(|s| s * s).sum::<f32>() / FRAME as f32).sqrt();
+        let input_db = (20.0 * rms.log10()).max(-100.0);
+        let mut voice = 0.0;
+        if suppress || auto {
             let denoise = self.denoise.get_or_insert_with(DenoiseState::new);
             for s in &mut self.pending {
                 *s *= I16_SCALE;
             }
-            denoise.process_frame(&mut self.frame, &self.pending);
-            for s in &mut self.frame {
-                *s = (*s / I16_SCALE).clamp(-1.0, 1.0);
+            voice = denoise.process_frame(&mut self.frame, &self.pending);
+            if suppress {
+                for s in &mut self.frame {
+                    *s = (*s / I16_SCALE).clamp(-1.0, 1.0);
+                }
+            } else {
+                // Only the voice detector was wanted: keep the input.
+                for (f, p) in self.frame.iter_mut().zip(&self.pending) {
+                    *f = p / I16_SCALE;
+                }
             }
         } else {
             self.denoise = None;
@@ -138,15 +173,21 @@ impl Processor {
         }
         self.pending.clear();
 
+        if input_db < self.floor_db {
+            self.floor_db = input_db;
+        } else {
+            self.floor_db += FLOOR_RISE_DB;
+        }
+
         let peak = self.frame.iter().fold(0f32, |m, s| m.max(s.abs()));
         self.publish_level(peak, FRAME);
         let target = if gate {
-            let db = if peak > 0.0 {
-                20.0 * peak.log10()
+            let open = if auto {
+                voice >= VOICE_PROBABILITY && input_db >= self.floor_db + FLOOR_MARGIN_DB
             } else {
-                f32::NEG_INFINITY
+                peak > 0.0 && 20.0 * peak.log10() >= self.ctrl.threshold_db()
             };
-            if db >= self.ctrl.threshold_db() {
+            if open {
                 self.hold = HOLD_FRAMES;
             } else {
                 self.hold = self.hold.saturating_sub(1);
@@ -208,7 +249,7 @@ mod tests {
 
     #[test]
     fn passes_through_untouched_when_off() {
-        let ctrl = Arc::new(ProcessingControl::new(false, false, -40.0));
+        let ctrl = Arc::new(ProcessingControl::new(false, false, false, -40.0));
         let mut p = Processor::new(ctrl.clone());
         let input = tone(1000, 0.5);
         assert_eq!(run(&mut p, &input, 314), input);
@@ -217,7 +258,7 @@ mod tests {
 
     #[test]
     fn gate_silences_quiet_input_and_opens_for_loud() {
-        let ctrl = Arc::new(ProcessingControl::new(false, true, -30.0));
+        let ctrl = Arc::new(ProcessingControl::new(false, true, false, -30.0));
         let mut p = Processor::new(ctrl.clone());
         // Quiet (-40 dBFS) for 1 s: after the hold and release it is silent.
         let quiet = run(&mut p, &tone(48_000, 0.01), 334);
@@ -234,7 +275,7 @@ mod tests {
 
     #[test]
     fn switching_off_flushes_buffered_audio() {
-        let ctrl = Arc::new(ProcessingControl::new(false, true, -100.0));
+        let ctrl = Arc::new(ProcessingControl::new(false, true, false, -100.0));
         let mut p = Processor::new(ctrl.clone());
         let a = run(&mut p, &tone(700, 0.5), 1400); // one frame out, 220 buffered
         assert_eq!(a.len(), FRAME * 2);
@@ -245,7 +286,7 @@ mod tests {
 
     #[test]
     fn suppression_reduces_steady_noise() {
-        let ctrl = Arc::new(ProcessingControl::new(true, false, -40.0));
+        let ctrl = Arc::new(ProcessingControl::new(true, false, false, -40.0));
         let mut p = Processor::new(ctrl);
         // Deterministic white-ish noise at about -30 dBFS for 2 s.
         let mut seed = 1u32;
@@ -265,5 +306,113 @@ mod tests {
             rms(&out[half..]),
             rms(&noise[half..])
         );
+    }
+}
+
+#[cfg(test)]
+mod auto_gate_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// Synthesised speech: "Hello there, can you hear me?" (with a short
+    /// pause at the comma), 1.5 s of silence, "Testing one two three."
+    fn speech() -> Vec<f32> {
+        let file = include_bytes!("testdata/speech.ogg").to_vec();
+        crate::soundboard::decode(file, Some("ogg")).unwrap()
+    }
+
+    /// Deterministic white noise, interleaved stereo.
+    fn noise(frames: usize, amp: f32) -> Vec<f32> {
+        let mut seed = 7u32;
+        (0..frames)
+            .flat_map(|_| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let v = ((seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 2.0 * amp;
+                [v, v]
+            })
+            .collect()
+    }
+
+    /// Whether the gate is open after each 10 ms of `input`.
+    fn trace(p: &mut Processor, ctrl: &ProcessingControl, input: &[f32]) -> Vec<bool> {
+        input
+            .chunks(FRAME * CHANNELS)
+            .map(|chunk| {
+                p.process(chunk, &mut |_| {});
+                ctrl.gate_open()
+            })
+            .collect()
+    }
+
+    /// Lengths of the runs of open gate, ignoring the first `skip` frames.
+    fn open_runs(trace: &[bool], skip: usize) -> Vec<usize> {
+        let mut runs = Vec::new();
+        let mut run = 0;
+        for &open in &trace[skip..] {
+            if open {
+                run += 1;
+            } else if run > 0 {
+                runs.push(run);
+                run = 0;
+            }
+        }
+        if run > 0 {
+            runs.push(run);
+        }
+        runs
+    }
+
+    fn with_noise(mut audio: Vec<f32>, amp: f32) -> Vec<f32> {
+        let bg = noise(audio.len() / CHANNELS, amp);
+        for (a, n) in audio.iter_mut().zip(bg) {
+            *a += n;
+        }
+        audio
+    }
+
+    #[test]
+    fn auto_gate_opens_for_speech_and_closes_between_phrases() {
+        let ctrl = Arc::new(ProcessingControl::new(false, true, true, -45.0));
+        let mut p = Processor::new(ctrl.clone());
+        let t = trace(&mut p, &ctrl, &with_noise(speech(), 0.003));
+        let runs = open_runs(&t, 0);
+        assert_eq!(runs.len(), 3, "one open run per phrase: {runs:?}");
+        assert!(runs.iter().all(|&r| r > 50), "{runs:?}");
+    }
+
+    #[test]
+    fn auto_gate_ignores_loud_steady_noise() {
+        // RNNoise's voice detector alone scores loud hiss as likely voice.
+        let ctrl = Arc::new(ProcessingControl::new(false, true, true, -45.0));
+        let mut p = Processor::new(ctrl.clone());
+        let t = trace(&mut p, &ctrl, &noise(96_000, 0.3));
+        assert!(t.iter().all(|&open| !open), "stays shut");
+    }
+
+    #[test]
+    fn auto_gate_hears_speech_over_background_hiss() {
+        let ctrl = Arc::new(ProcessingControl::new(false, true, true, -45.0));
+        let mut p = Processor::new(ctrl.clone());
+        // Settle on the hiss first, as in a real room.
+        trace(&mut p, &ctrl, &noise(48_000, 0.05));
+        let t = trace(&mut p, &ctrl, &with_noise(speech(), 0.05));
+        let runs = open_runs(&t, 0);
+        assert_eq!(runs.len(), 3, "{runs:?}");
+        assert!(runs.iter().all(|&r| r > 50), "{runs:?}");
+    }
+
+    #[test]
+    fn auto_gate_without_suppression_keeps_the_input() {
+        let ctrl = Arc::new(ProcessingControl::new(false, true, true, -45.0));
+        let mut p = Processor::new(ctrl);
+        let input = speech();
+        let mut out = Vec::new();
+        p.process(&input, &mut |d| out.extend_from_slice(d));
+        // Where the gate is fully open, audio is untouched (just delayed by
+        // the partial frame, here zero as the input is whole frames).
+        let i = (0..out.len())
+            .step_by(2)
+            .find(|&i| (out[i] - input[i]).abs() < 1e-6 && input[i].abs() > 0.05);
+        assert!(i.is_some(), "speech passes through unchanged while open");
     }
 }

@@ -14,6 +14,18 @@ let playing = new Set(); // ids of the soundboard sounds playing now
 
 // ---------------------------------------------------------------- utilities
 
+// Icons are drawn here rather than using emoji such as 🎚, which some Windows
+// fonts don't have (they show as a box).
+const SVG = 'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"';
+const ICONS = {
+  sliders: `<svg ${SVG}><path d="M6 4v16M12 4v16M18 4v16" stroke-width="1.5" opacity=".55"/><path d="M4 15h4M10 8h4M16 12h4" stroke-width="3"/></svg>`,
+  window: `<svg ${SVG}><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg>`,
+  mic: `<svg ${SVG}><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></svg>`,
+  speaker: `<svg ${SVG}><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.5 9a4 4 0 0 1 0 6M19 6.5a8 8 0 0 1 0 11"/></svg>`,
+  cog: `<svg ${SVG} stroke-width="1.75"><path d="M19.21 9.59 L19.51 10.81 L22.13 10.85 L22.13 13.15 L19.51 13.19 L19.21 14.41 L18.80 15.39 L18.15 16.47 L19.98 18.35 L18.35 19.98 L16.47 18.15 L15.39 18.80 L14.41 19.21 L13.19 19.51 L13.15 22.13 L10.85 22.13 L10.81 19.51 L9.59 19.21 L8.61 18.80 L7.53 18.15 L5.65 19.98 L4.02 18.35 L5.85 16.47 L5.20 15.39 L4.79 14.41 L4.49 13.19 L1.87 13.15 L1.87 10.85 L4.49 10.81 L4.79 9.59 L5.20 8.61 L5.85 7.53 L4.02 5.65 L5.65 4.02 L7.53 5.85 L8.61 5.20 L9.59 4.79 L10.81 4.49 L10.85 1.87 L13.15 1.87 L13.19 4.49 L14.41 4.79 L15.39 5.20 L16.47 5.85 L18.35 4.02 L19.98 5.65 L18.15 7.53 L18.80 8.61Z"/><circle cx="12" cy="12" r="3"/></svg>`,
+  grip: `<svg ${SVG}><g fill="currentColor" stroke="none"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></g></svg>`,
+};
+
 async function api(method, path, body) {
   const res = await fetch(path, {
     method,
@@ -110,6 +122,7 @@ function render(next) {
   $("#autostart").checked = state.autostart;
   renderOutput();
   renderStrips();
+  renderMicDialog();
   renderListen();
   renderSounds();
   renderHear();
@@ -174,16 +187,16 @@ function channelList() {
     id: "master",
     name: "Master",
     detail: "Final mix sent to the output",
-    icon: "🎚",
+    icon: "sliders",
     gain_db: state.master.gain_db,
     muted: state.master.muted,
     status: null,
   }];
   for (const s of state.sources) {
     const [detail, icon] = {
-      app: [s.exe, "🗔"],
-      device: [s.device ? s.device.name : "Default microphone (follows Windows)", "🎙"],
-      soundboard: ["Sounds from the soundboard below", "🔊"],
+      app: [s.exe, "window"],
+      device: [s.device ? s.device.name : "Default microphone (follows Windows)", "mic"],
+      soundboard: ["Sounds from the soundboard below", "speaker"],
     }[s.kind];
     list.push({ ...s, detail, icon });
   }
@@ -205,10 +218,14 @@ function createStrip(ch) {
     handle: $(".handle", node),
     listen: $(".listen", node),
     monitorStatus: $(".monitor-status", node),
+    settings: $(".settings", node),
     dragging: false,
   };
   const id = ch.id;
   node.dataset.id = id;
+  parts.icon.innerHTML = ICONS[ch.icon];
+  parts.handle.innerHTML = ICONS.grip;
+  parts.settings.innerHTML = ICONS.cog;
   if (id === "master") {
     node.classList.add("master");
     parts.name.readOnly = true;
@@ -225,7 +242,10 @@ function createStrip(ch) {
   } else {
     setUpReorder(node, parts.handle, id);
   }
-  if (ch.kind === "device") setUpProcessing(node, parts, id);
+  if (ch.kind === "device") {
+    parts.settings.hidden = false;
+    parts.settings.addEventListener("click", () => openMicDialog(id));
+  }
 
   parts.gainValue.addEventListener("click", () => editGain(id, parts));
 
@@ -253,43 +273,6 @@ function createStrip(ch) {
     if (confirm(`Remove “${parts.name.value}” from the mix?`)) attempt(api("DELETE", `/api/channels/${id}`));
   });
   return { el: node, parts };
-}
-
-/** Wires up a microphone's noise suppression and noise gate controls. */
-function setUpProcessing(node, parts, id) {
-  const proc = $(".processing", node);
-  proc.hidden = false;
-  Object.assign(parts, {
-    proc,
-    procSummary: $(".proc-summary", node),
-    suppress: $(".suppress", node),
-    gateOn: $(".gate-on", node),
-    gateControls: $(".gate-controls", node),
-    micMask: $(".mic-meter .meter-mask", node),
-    thresholdMark: $(".threshold-mark", node),
-    threshold: $(".threshold", node),
-    thresholdValue: $(".threshold-value", node),
-    gateState: $(".gate-state", node),
-  });
-  const patch = (body) => attempt(api("PATCH", `/api/channels/${id}`, body));
-  parts.suppress.addEventListener("change", () => patch({ noise_suppression: parts.suppress.checked }));
-  parts.gateOn.addEventListener("change", () => {
-    parts.gateControls.hidden = !parts.gateOn.checked;
-    patch({ noise_gate: parts.gateOn.checked });
-  });
-  const sendThreshold = throttle((db) => patch({ gate_db: db }), 60);
-  parts.threshold.addEventListener("input", () => {
-    const db = Number(parts.threshold.value);
-    showThreshold(parts, db);
-    sendThreshold(db);
-  });
-}
-
-function showThreshold(parts, db) {
-  const text = `${db < 0 ? "−" : ""}${Math.abs(db)} dB`;
-  parts.thresholdValue.textContent = text;
-  parts.threshold.setAttribute("aria-valuetext", text);
-  parts.thresholdMark.style.left = `${((db + 60) / 60) * 100}%`;
 }
 
 /** Parses a typed gain: accepts "−6", "-6,5", "-6 dB". Returns null if invalid. */
@@ -443,7 +426,6 @@ function renderStrips() {
       strips.set(ch.id, strip);
     }
     const p = strip.parts;
-    p.icon.textContent = ch.icon;
     strip.el.setAttribute("aria-label", ch.name);
     p.gain.setAttribute("aria-label", `${ch.name} volume`);
     p.mute.setAttribute("aria-label", `Mute ${ch.name}`);
@@ -454,7 +436,9 @@ function renderStrips() {
     if (document.activeElement !== p.name) p.name.value = ch.name;
     p.detail.textContent = ch.detail;
     p.detail.title = ch.detail;
-    if (ch.status && p.status.isConnected !== false) {
+    // Master has no status (its element is removed); new cards aren't in
+    // the page yet on their first render, so don't test for that.
+    if (ch.status) {
       p.status.className = `status ${ch.status.state}`;
       p.status.textContent = ch.status.state === "running" ? `Live · ${ch.status.message}` : ch.status.message;
       p.status.title = ch.status.message;
@@ -465,17 +449,13 @@ function renderStrips() {
       p.gain.setAttribute("aria-valuetext", formatDb(ch.gain_db));
       p.gainValue.setAttribute("aria-label", `${ch.name} volume ${formatDb(ch.gain_db)}. Click to type a value`);
     }
-    if (p.proc) {
-      p.suppress.checked = ch.noise_suppression;
-      p.gateOn.checked = ch.noise_gate;
-      p.gateControls.hidden = !ch.noise_gate;
-      if (document.activeElement !== p.threshold) {
-        p.threshold.value = ch.gate_db;
-        showThreshold(p, ch.gate_db);
-      }
-      p.threshold.setAttribute("aria-label", `${ch.name} noise gate level`);
-      const on = [ch.noise_suppression && "noise suppression", ch.noise_gate && "gate"].filter(Boolean);
-      p.procSummary.textContent = `· ${on.length ? on.join(", ") : "off"}`;
+    if (ch.kind === "device") {
+      // The cog lights up while any processing is on.
+      const on = [ch.noise_suppression && "noise suppression", ch.noise_gate && `${ch.gate_mode === "auto" ? "automatic" : "manual"} noise gate`].filter(Boolean);
+      const summary = `Mic processing: ${on.length ? on.join(", ") : "off"}`;
+      p.settings.classList.toggle("on", on.length > 0);
+      p.settings.title = summary;
+      p.settings.setAttribute("aria-label", `${ch.name} ${summary.toLowerCase()}`);
     }
     p.mute.setAttribute("aria-pressed", String(ch.muted));
     p.mute.textContent = ch.muted ? "Muted" : "Mute";
@@ -511,14 +491,79 @@ function updateMeters(meters) {
     if (!strip) continue;
     setMeter(strip.parts.mask, m.peak);
     strip.el.classList.toggle("gated", !m.open);
-    const p = strip.parts;
-    if (p.micMask && m.mic_level !== undefined && !p.gateControls.hidden) {
-      setMeter(p.micMask, m.mic_level);
-      p.gateState.textContent = m.mic_gate_open ? "Open" : "Closed";
-      p.gateState.className = `gate-state ${m.mic_gate_open ? "open" : "closed"}`;
-    }
+  }
+  const mic = micDialogId && meters[micDialogId];
+  if (mic && mic.mic_level !== undefined) {
+    setMeter($("#mic-dialog .mic-meter .meter-mask"), mic.mic_level);
+    const state = $("#mic-gate-state");
+    state.textContent = mic.mic_gate_open ? "Open" : "Closed";
+    state.className = `gate-state ${mic.mic_gate_open ? "open" : "closed"}`;
   }
 }
+
+// ---------------------------------------------------------------- mic processing
+
+let micDialogId = null; // source whose mic processing dialog is open
+
+function micSource() {
+  return state && state.sources.find((s) => s.id === micDialogId);
+}
+
+function openMicDialog(id) {
+  micDialogId = id;
+  renderMicDialog();
+  $("#mic-dialog").showModal();
+}
+
+function renderMicDialog() {
+  if (!micDialogId) return;
+  const src = micSource();
+  if (!src) {
+    $("#mic-dialog").close();
+    return;
+  }
+  $("#mic-title").textContent = `Mic processing: ${src.name}`;
+  $("#mic-suppress").checked = src.noise_suppression;
+  $("#mic-gate").checked = src.noise_gate;
+  $("#mic-gate-controls").hidden = !src.noise_gate;
+  for (const r of document.querySelectorAll("#mic-dialog [name=gate-mode]")) r.checked = r.value === src.gate_mode;
+  const manual = src.gate_mode === "manual";
+  $("#mic-threshold").hidden = $("#mic-threshold-value").hidden = $("#mic-threshold-mark").hidden = !manual;
+  $("#mic-gate-hint").textContent = manual
+    ? "The meter shows your mic. Set the line just above where it sits while you're quiet."
+    : "Opens when it hears speech that's louder than the background noise, like Discord's automatic sensitivity. If it misses quiet speech, use a level instead.";
+  if (document.activeElement !== $("#mic-threshold")) showThreshold(src.gate_db);
+}
+
+function showThreshold(db) {
+  const text = `${db < 0 ? "−" : ""}${Math.abs(db)} dB`;
+  $("#mic-threshold").value = db;
+  $("#mic-threshold-value").textContent = text;
+  $("#mic-threshold").setAttribute("aria-valuetext", text);
+  $("#mic-threshold-mark").style.left = `${((db + 60) / 60) * 100}%`;
+}
+
+const patchMic = (body) => attempt(api("PATCH", `/api/channels/${micDialogId}`, body));
+$("#mic-suppress").addEventListener("change", (e) => patchMic({ noise_suppression: e.target.checked }));
+$("#mic-gate").addEventListener("change", (e) => {
+  $("#mic-gate-controls").hidden = !e.target.checked;
+  patchMic({ noise_gate: e.target.checked });
+});
+for (const r of document.querySelectorAll("#mic-dialog [name=gate-mode]")) {
+  r.addEventListener("change", () => patchMic({ gate_mode: r.value }));
+}
+const sendThreshold = throttle((id, db) => attempt(api("PATCH", `/api/channels/${id}`, { gate_db: db })), 60);
+$("#mic-threshold").addEventListener("input", (e) => {
+  const db = Number(e.target.value);
+  $("#mic-threshold").value = db;
+  showThreshold(db);
+  sendThreshold(micDialogId, db);
+});
+$("#mic-dialog").addEventListener("close", () => {
+  const strip = strips.get(micDialogId);
+  micDialogId = null;
+  if (strip) strip.parts.settings.focus();
+});
 
 // ---------------------------------------------------------------- add source
 
@@ -737,8 +782,7 @@ function soundTile(sound) {
     title: ready ? `Play ${sound.name}` : sound.state === "error" ? sound.message : "Loading…",
   }, el("span", { className: "play-icon", "aria-hidden": "true", textContent: "▶" }), el("span", { className: "sound-name", textContent: sound.name }));
   play.addEventListener("click", () => attempt(api("POST", `/api/sounds/${sound.id}/play`)));
-  // U+FE0E asks for the plain text cog, not a colour emoji.
-  const edit = el("button", { type: "button", className: "edit", textContent: "⚙\uFE0E", title: "Settings", "aria-label": `Settings for ${sound.name}` });
+  const edit = el("button", { type: "button", className: "edit", innerHTML: ICONS.cog, title: "Settings", "aria-label": `Settings for ${sound.name}` });
   edit.addEventListener("click", () => openSoundDialog(sound.id));
   const tile = el("div", { className: `sound ${sound.state}`, "data-id": sound.id }, play, edit);
   if (sound.state === "error") tile.append(el("span", { className: "sound-error", textContent: "Couldn't load this file", title: sound.message }));
