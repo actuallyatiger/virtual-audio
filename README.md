@@ -44,8 +44,10 @@ It runs as a small tray app and is controlled from a web page served on
 
 1. Install VB-Audio Virtual Cable and reboot.
 2. Run `virtual-audio.exe`. The mixer opens in your browser, and a tray icon
-   appears (left-click it to reopen the page, right-click for Quit).
-3. Under **Output**, select **CABLE Input (VB-Audio Virtual Cable)**.
+   appears. Left-click it to reopen the page; right-click it for **Open
+   mixer**, **Open log file** and **Quit**.
+3. Check that **Output** is **CABLE Input (VB-Audio Virtual Cable)**. It is
+   selected automatically on first run if the cable is installed.
 4. Your default microphone is added automatically. Click **+ Add source** to
    add apps (e.g. `chrome.exe`) or other input devices.
 5. In Discord: **Settings → Voice & Video → Input Device → CABLE Output
@@ -55,14 +57,36 @@ It runs as a small tray app and is controlled from a web page served on
 > Tip: if you capture an app, don't also route the cable back to your
 > speakers, or you'll hear that app twice.
 
+## Troubleshooting
+
+Everything the app knows is in `%APPDATA%\VirtualAudioMixer\` (paste that
+into Explorer's address bar, or use the tray's **Open log file**):
+
+| File | What it is |
+| --- | --- |
+| `config.json` | Your sources, output, hotkeys and volumes. |
+| `config.json.bad` | A `config.json` that could not be read. It is moved aside and the app starts with defaults, so you can repair it. |
+| `log.txt` | This run's log: every source and output it opens, errors, and crashes. |
+| `log.previous.txt` | The previous run's log. If the app vanished, look here. |
+
+The app understands two command-line flags:
+
+- `--background`: start without opening the browser. Start with Windows uses
+  this.
+- `--verbose`: log extra debug detail.
+
+Logs go to these files only in Windows release builds. Debug builds and demo
+mode print them to the terminal instead.
+
 ## Building
 
 ```sh
 cargo build --release            # on Windows → target/release/virtual-audio.exe
 ```
 
-CI builds the Windows release `.exe` on every push. Download it from the
-workflow run's artifacts.
+CI builds the Windows release `.exe` for pull requests and pushes to `main`.
+Download it from the workflow run's artifacts. Building needs Rust 1.88 or
+newer.
 
 On Linux and macOS the same binary builds with a **demo backend**: fake
 devices and apps that generate tones. You can develop and test the engine and
@@ -88,8 +112,11 @@ cargo build --target x86_64-pc-windows-gnu
 | Tray icon, autostart, browser launch | `src/tray.rs`, `src/platform.rs` |
 
 All audio runs at 48 kHz stereo float. Windows converts each device's native
-format (`AUTOCONVERTPCM`). Each source keeps about 20 ms of buffer, so total
-added latency is roughly 30–50 ms.
+format (`AUTOCONVERTPCM`). Each source keeps about 30 ms of buffer, so total
+added latency is roughly 40–60 ms. Sources and the output run on separate
+clocks, so the mixer corrects drift continuously: when a source's buffer
+strays from its target it takes one frame more or less per 10 ms block and
+stretches the block to fit, a pitch change of about 0.2% for that block.
 
 The web UI is plain HTML/CSS/JS with no build step. It is compiled into the
 executable with `include_str!`, so the release is a single `.exe`.
@@ -101,16 +128,20 @@ executable with `include_str!`, so the release is a single `.exe`.
 | GET | `/api/state` | |
 | GET | `/api/devices` | |
 | GET | `/api/apps` | |
-| POST | `/api/sources` | `{"kind":"app","exe":"chrome.exe"}` or `{"kind":"device","device":null}` |
-| PATCH | `/api/channels/{id or "master"}` | `{"gain_db":-6,"muted":true,"name":"…"}` |
+| POST | `/api/sources` | `{"kind":"app","exe":"chrome.exe"}` or `{"kind":"device","device":null}`, plus an optional `"name"` |
+| PATCH | `/api/channels/{id or "master"}` | `{"gain_db":-6,"muted":true,"name":"…"}` (`name` applies to sources only) |
 | DELETE | `/api/channels/{id}` | |
 | PUT | `/api/output` | `{"device":{"id":"…","name":"…"}}` or `{"device":null}` |
 | PUT | `/api/hotkeys` | `[{"keys":"Ctrl+Shift+M","action":"push_to_talk","target":"…"}]` |
 | PUT | `/api/settings` | `{"autostart":true}` |
+| POST | `/api/quit` | Stops the app. |
 | GET | `/ws` | WebSocket: pushes `state` on change and `meters` about 30 times a second |
 
 Requests whose `Host` or `Origin` isn't `127.0.0.1`/`localhost` on our port are
-rejected. This stops other websites from controlling the mixer.
+rejected, and the UI can't be embedded in another site's frame. This stops
+other websites from controlling the mixer. Invalid input gets a 400 with a
+message; names are limited to 100 characters, and sources and hotkeys to 64
+each.
 
 ## Roadmap
 
@@ -120,9 +151,6 @@ rejected. This stops other websites from controlling the mixer.
   signing (or test-signing mode) to install.
 - Built-in soundboard (play files from the UI or hotkeys).
 - Monitor the mix on headphones.
-- Adaptive resampling to absorb clock drift between devices. Today a source
-  that drifts too far is trimmed, causing a tiny glitch every few minutes at
-  worst.
 
 ## License
 
