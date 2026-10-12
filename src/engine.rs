@@ -21,6 +21,18 @@ use std::time::{Duration, Instant};
 
 pub const MASTER: &str = "master";
 const RETRY_DELAY: Duration = Duration::from_secs(3);
+/// Limits on API input, so a misbehaving local client can't bloat the
+/// config or the 10 ms hotkey poll loop.
+const MAX_NAME_CHARS: usize = 100;
+const MAX_SOURCES: usize = 64;
+const MAX_HOTKEYS: usize = 64;
+
+fn check_len(what: &str, value: &str, max: usize) -> anyhow::Result<()> {
+    if value.chars().count() > max {
+        bail!("{what} is too long (max {max} characters)");
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct Status {
@@ -97,6 +109,9 @@ pub struct Engine {
     mixer: Arc<Mutex<Mixer>>,
     changed: tokio::sync::watch::Sender<u64>,
     shutdown: AtomicBool,
+    /// Serializes supervise() runs (the supervisor thread and add_source),
+    /// which no longer hold `inner` throughout.
+    supervising: Mutex<()>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -159,6 +174,7 @@ impl Engine {
             mixer,
             changed: tokio::sync::watch::channel(0).0,
             shutdown: AtomicBool::new(false),
+            supervising: Mutex::new(()),
         });
         engine.restart_output(&mut engine.inner.lock().unwrap());
         let weak = Arc::downgrade(&engine);
@@ -287,12 +303,17 @@ impl Engine {
             (None, SourceKind::Device { device: None }) => "Default microphone".into(),
             (None, SourceKind::App { exe }) => display_exe(exe),
         };
-        if let SourceKind::App { exe } = &kind
-            && exe.trim().is_empty()
-        {
-            bail!("executable name is required");
+        if let SourceKind::App { exe } = &kind {
+            if exe.trim().is_empty() {
+                bail!("executable name is required");
+            }
+            check_len("executable name", exe, 260)?;
         }
+        check_len("name", &name, MAX_NAME_CHARS)?;
         let mut inner = self.inner.lock().unwrap();
+        if inner.config.sources.len() >= MAX_SOURCES {
+            bail!("too many sources (max {MAX_SOURCES})");
+        }
         let id = new_id("s");
         let cfg = SourceConfig {
             id: id.clone(),
@@ -329,6 +350,9 @@ impl Engine {
     }
 
     pub fn update_channel(&self, id: &str, patch: ChannelPatch) -> anyhow::Result<()> {
+        if let Some(name) = &patch.name {
+            check_len("name", name.trim(), MAX_NAME_CHARS)?;
+        }
         let mut inner = self.inner.lock().unwrap();
         let (channel, ctrl) = if id == MASTER {
             (&mut inner.config.master, self.master.clone())
@@ -410,8 +434,12 @@ impl Engine {
     }
 
     pub fn set_hotkeys(&self, hotkeys: Vec<Hotkey>) -> anyhow::Result<()> {
+        if hotkeys.len() > MAX_HOTKEYS {
+            bail!("too many hotkeys (max {MAX_HOTKEYS})");
+        }
         let mut inner = self.inner.lock().unwrap();
         for h in &hotkeys {
+            check_len("hotkey", &h.keys, MAX_NAME_CHARS)?;
             crate::hotkeys::parse(&h.keys)?;
             if h.target != MASTER && !inner.sources.contains_key(&h.target) {
                 bail!("hotkey target {} does not exist", h.target);
@@ -448,34 +476,87 @@ impl Engine {
     }
 
     /// Starts captures that should be running and reaps dead ones.
+    ///
+    /// Backend queries (COM device/process enumeration) and the config save
+    /// can be slow, so they run without holding `inner`: snapshot what is
+    /// needed, query, then re-lock briefly to apply.
     fn supervise(&self) {
-        let mut inner = self.inner.lock().unwrap();
+        let _serial = self.supervising.lock().unwrap();
         let now = Instant::now();
+
+        // 1. Snapshot under the lock.
+        let (sources, pids, wants_default, to_resolve) = {
+            let inner = self.inner.lock().unwrap();
+            let mut pids = Vec::new();
+            let mut wants_default = false;
+            let mut to_resolve = Vec::new();
+            for src in &inner.config.sources {
+                let rt = &inner.sources[&src.id];
+                pids.extend(rt.pid);
+                let idle = rt.capture.is_none() && now >= rt.retry_at;
+                match &src.kind {
+                    SourceKind::Device { device: None } => {
+                        wants_default |= rt.capture.is_some() || idle
+                    }
+                    SourceKind::App { exe } if idle => to_resolve.push(exe.clone()),
+                    _ => {}
+                }
+            }
+            (
+                inner.config.sources.clone(),
+                pids,
+                wants_default,
+                to_resolve,
+            )
+        };
+
+        // 2. Query the backend without the lock.
+        let default_input = wants_default
+            .then(|| self.backend.default_input())
+            .flatten();
+        let alive: HashMap<u32, bool> = pids
+            .into_iter()
+            .map(|pid| (pid, self.backend.process_alive(pid)))
+            .collect();
+        let found: HashMap<String, Option<u32>> = to_resolve
+            .into_iter()
+            .map(|exe| {
+                let pid = self.backend.find_process(&exe);
+                (exe, pid)
+            })
+            .collect();
+
+        // 3. Apply under the lock. Sources may have changed in the meantime.
+        let mut inner = self.inner.lock().unwrap();
         let mut changed = false;
-        let sources = inner.config.sources.clone();
+        if inner.output.as_ref().is_some_and(|w| w.finished()) {
+            tracing::error!("output thread stopped unexpectedly, restarting it");
+            self.restart_output(&mut inner);
+            changed = true;
+        }
         let output_name = inner.config.output.as_ref().map(|o| o.name.clone());
         for src in &sources {
-            let rt = inner.sources.get_mut(&src.id).unwrap();
+            let Some(rt) = inner.sources.get_mut(&src.id) else {
+                continue;
+            };
 
             if rt.capture.is_some()
                 && let Some(captured) = &rt.default_id
+                && default_input.as_ref().map(|d| &d.id) != Some(captured)
             {
-                let current = self.backend.default_input();
-                if current.as_ref().map(|d| &d.id) != Some(captured) {
-                    let name = current.map(|d| d.name).unwrap_or_else(|| "none".into());
-                    tracing::info!(
-                        "source {:?}: Windows default mic changed to {name:?}",
-                        src.name
-                    );
-                    if let Some(w) = rt.capture.take() {
-                        w.stop();
-                    }
-                    rt.default_id = None;
-                    rt.retry_at = now;
+                let name = default_input.as_ref().map_or("none", |d| d.name.as_str());
+                tracing::info!(
+                    "source {:?}: Windows default mic changed to {name:?}",
+                    src.name
+                );
+                if let Some(w) = rt.capture.take() {
+                    w.stop();
                 }
+                rt.default_id = None;
+                rt.retry_at = now;
             }
 
-            let exited = rt.pid.is_some_and(|pid| !self.backend.process_alive(pid));
+            let exited = rt.pid.is_some_and(|pid| alive.get(&pid) == Some(&false));
             let failed = rt.capture.as_ref().is_some_and(|w| w.finished());
             if exited || failed {
                 if let Some(w) = rt.capture.take() {
@@ -497,7 +578,7 @@ impl Engine {
                             set_status(
                                 &rt.status,
                                 "error",
-                                "Capture stopped unexpectedly, see log.txt",
+                                "Capture stopped unexpectedly, see the log",
                             );
                         }
                         rt.retry_at = now + RETRY_DELAY;
@@ -515,8 +596,8 @@ impl Engine {
                     // what we checked, and can notice when the default moves.
                     let (id, name) = match device {
                         Some(d) => (Some(d.id.clone()), Some(d.name.clone())),
-                        None => match self.backend.default_input() {
-                            Some(d) => (Some(d.id), Some(d.name)),
+                        None => match &default_input {
+                            Some(d) => (Some(d.id.clone()), Some(d.name.clone())),
                             None => (None, None),
                         },
                     };
@@ -539,19 +620,23 @@ impl Engine {
                     }
                     CaptureTarget::Device(id)
                 }
-                SourceKind::App { exe } => match self.backend.find_process(exe) {
+                SourceKind::App { exe } => match found.get(exe).copied().flatten() {
                     Some(pid) => {
                         tracing::info!("source {:?}: found {exe} as PID {pid}", src.name);
                         rt.pid = Some(pid);
                         CaptureTarget::Process(pid)
                     }
                     None => {
-                        let msg = format!("Waiting for {exe} to start");
-                        if rt.status.lock().unwrap().message != msg {
-                            set_status(&rt.status, "waiting", msg);
-                            changed = true;
+                        // Not looked up this tick (it became idle meanwhile)
+                        // or not running: try again shortly.
+                        if found.contains_key(exe) {
+                            let msg = format!("Waiting for {exe} to start");
+                            if rt.status.lock().unwrap().message != msg {
+                                set_status(&rt.status, "waiting", msg);
+                                changed = true;
+                            }
+                            rt.retry_at = now + Duration::from_secs(2);
                         }
-                        rt.retry_at = now + Duration::from_secs(2);
                         continue;
                     }
                 },
@@ -572,18 +657,21 @@ impl Engine {
             ));
             changed = true;
         }
-
         if changed {
             self.changed.send_modify(|v| *v += 1);
         }
-        if inner.dirty {
-            // On failure stay dirty and retry next tick; log each new error once.
-            match inner.config.save() {
-                Ok(()) => {
-                    inner.dirty = false;
-                    inner.save_error = None;
-                }
+
+        // 4. Save without the lock. On failure mark dirty again so the next
+        // tick retries, and log each distinct error once.
+        let to_save = std::mem::take(&mut inner.dirty).then(|| inner.config.clone());
+        drop(inner);
+        if let Some(config) = to_save {
+            let result = config.save();
+            let mut inner = self.inner.lock().unwrap();
+            match result {
+                Ok(()) => inner.save_error = None,
                 Err(e) => {
+                    inner.dirty = true;
                     let msg = format!("{e:#}");
                     if inner.save_error.as_ref() != Some(&msg) {
                         tracing::error!("saving config: {msg}");
@@ -636,26 +724,30 @@ fn capture_thread(
     stop: &AtomicBool,
     changed: &tokio::sync::watch::Sender<u64>,
 ) {
-    let notify = || changed.send_modify(|v| *v += 1);
+    // Once stopped, a replacement thread shares `status`; stay quiet so a
+    // late result from this one (e.g. a slow open) can't overwrite it.
+    let report = |state, message: String| {
+        if !stop.load(Ordering::Relaxed) {
+            set_status(status, state, message);
+            changed.send_modify(|v| *v += 1);
+        }
+    };
     backend.promote_audio_thread();
     tracing::info!("opening capture {target:?}");
     let mut stream = match backend.open_capture(&target) {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!("capture {target:?} failed: {e:#}");
-            set_status(status, "error", format!("{e:#}"));
-            notify();
+            report("error", format!("{e:#}"));
             return;
         }
     };
     tracing::info!("capturing {target:?} ({})", stream.describe());
-    set_status(status, "running", stream.describe());
-    notify();
+    report("running", stream.describe());
     while !stop.load(Ordering::Relaxed) {
         if let Err(e) = stream.read(&mut |data| push_frames(&mut tx, data)) {
             tracing::warn!("capture {target:?} stopped: {e:#}");
-            set_status(status, "error", format!("{e:#}"));
-            notify();
+            report("error", format!("{e:#}"));
             return;
         }
     }
