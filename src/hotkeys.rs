@@ -109,6 +109,30 @@ pub fn gate_states<'a>(hotkeys: impl Iterator<Item = (&'a Hotkey, bool)>) -> Has
         .collect()
 }
 
+/// Last seen (keys, held) per hotkey id.
+type PrevHeld = HashMap<String, (String, bool)>;
+
+/// Targets of toggle-mute hotkeys that were just pressed. A binding that is
+/// new or whose keys changed starts from its current state, so recording new
+/// keys (which are still held when saved) doesn't count as a press.
+fn toggle_presses<'a>(
+    prev: &mut PrevHeld,
+    hotkeys: impl Iterator<Item = &'a Hotkey>,
+    held: &[bool],
+) -> Vec<String> {
+    let mut pressed = Vec::new();
+    for (hk, &is_held) in hotkeys.zip(held) {
+        let was = match prev.insert(hk.id.clone(), (hk.keys.clone(), is_held)) {
+            Some((keys, was)) if keys == hk.keys => was,
+            _ => is_held,
+        };
+        if hk.action == HotkeyAction::ToggleMute && is_held && !was {
+            pressed.push(hk.target.clone());
+        }
+    }
+    pressed
+}
+
 #[cfg(windows)]
 fn key_down(vk: u16) -> bool {
     use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
@@ -133,7 +157,7 @@ fn poll_loop(engine: Arc<Engine>) {
     let mut version = u64::MAX;
     let mut bindings: Vec<(Hotkey, Combo)> = Vec::new();
     let mut controls = HashMap::new();
-    let mut prev_held: HashMap<String, bool> = HashMap::new();
+    let mut prev_held = PrevHeld::new();
     loop {
         std::thread::sleep(std::time::Duration::from_millis(10));
         let v = engine.version();
@@ -152,11 +176,8 @@ fn poll_loop(engine: Arc<Engine>) {
             .map(|(_, combo)| combo.iter().all(|any| any.iter().any(|&vk| key_down(vk))))
             .collect();
 
-        for ((hk, _), &is_held) in bindings.iter().zip(&held) {
-            let was = prev_held.insert(hk.id.clone(), is_held).unwrap_or(false);
-            if hk.action == HotkeyAction::ToggleMute && is_held && !was {
-                engine.toggle_mute(&hk.target);
-            }
+        for target in toggle_presses(&mut prev_held, bindings.iter().map(|(h, _)| h), &held) {
+            engine.toggle_mute(&target);
         }
 
         let gates = gate_states(bindings.iter().map(|(h, _)| h).zip(held.iter().copied()));
@@ -197,6 +218,25 @@ mod tests {
             action,
             target: target.into(),
         }
+    }
+
+    #[test]
+    fn toggle_fires_on_press_but_not_when_keys_change() {
+        let mut prev = PrevHeld::new();
+        let mut hk = hk(HotkeyAction::ToggleMute, "mic");
+        hk.id = "h1".into();
+        let mut press = |hk: &Hotkey, held| toggle_presses(&mut prev, std::iter::once(hk), &[held]);
+
+        assert!(press(&hk, false).is_empty(), "first sight, not held");
+        assert_eq!(press(&hk, true), vec!["mic"], "press");
+        assert!(press(&hk, true).is_empty(), "still held");
+        assert!(press(&hk, false).is_empty(), "release");
+
+        // Re-recorded while the new keys are held: not a press.
+        hk.keys = "F2".into();
+        assert!(press(&hk, true).is_empty(), "keys changed while held");
+        assert!(press(&hk, false).is_empty());
+        assert_eq!(press(&hk, true), vec!["mic"], "next real press toggles");
     }
 
     #[test]
