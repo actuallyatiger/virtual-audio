@@ -214,6 +214,10 @@ impl Engine {
     /// Stops all audio and writes the configuration.
     pub fn shutdown(&self) {
         self.shutdown.store(true, Ordering::Relaxed);
+        // Wait out a supervise() in progress (it may be saving an older
+        // snapshot outside `inner`); later ones see the flag and do nothing.
+        // Then this is the one, final save.
+        let _serial = self.supervising.lock().unwrap();
         let mut inner = self.inner.lock().unwrap();
         if let Some(w) = inner.output.take() {
             w.stop();
@@ -226,6 +230,7 @@ impl Engine {
         if let Err(e) = inner.config.save() {
             tracing::error!("saving config: {e}");
         }
+        inner.dirty = false;
     }
 
     // -- queries ------------------------------------------------------------
@@ -482,6 +487,9 @@ impl Engine {
     /// needed, query, then re-lock briefly to apply.
     fn supervise(&self) {
         let _serial = self.supervising.lock().unwrap();
+        if self.shutdown.load(Ordering::Relaxed) {
+            return;
+        }
         let now = Instant::now();
 
         // 1. Snapshot under the lock.
