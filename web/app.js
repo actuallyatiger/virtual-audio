@@ -888,7 +888,8 @@ function renderSounds() {
   }
 
   const signature = JSON.stringify(state.sounds);
-  if (signature !== lastSoundsRender) {
+  // Mid-drag the tiles are being moved by hand; catch up when it ends.
+  if (signature !== lastSoundsRender && !soundDragId) {
     lastSoundsRender = signature;
     const container = $("#sounds");
     // Keep focus on the same tile's button across the rebuild.
@@ -959,11 +960,81 @@ function soundTile(sound) {
   play.addEventListener("click", () => attempt(api("POST", `/api/sounds/${sound.id}/play`)));
   const edit = el("button", { type: "button", className: "edit", innerHTML: ICONS.cog, title: "Settings", "aria-label": `Settings for ${sound.name}` });
   edit.addEventListener("click", () => openSoundDialog(sound.id));
-  const tile = el("div", { className: `sound ${sound.state}`, "data-id": sound.id }, play, edit);
+  const tile = el("div", { className: `sound ${sound.state}`, "data-id": sound.id, draggable: true }, play, edit);
+  setUpSoundReorder(tile, sound.id);
   if (sound.state === "error") tile.append(el("span", { className: "sound-error", textContent: "Couldn't load this file", title: sound.message }));
   else if (sound.state === "loading") tile.append(el("span", { className: "sound-error", textContent: "Loading…" }));
   return tile;
 }
+
+// ---- reordering sounds: drag a tile, or Alt+←/→ on a focused one
+
+let soundDragId = null;
+let soundDropped = false;
+
+function soundOrder() {
+  return state.sounds.map((s) => s.id);
+}
+
+/** Applies a new order at once and saves it, restoring on failure. */
+function saveSoundOrder(ids) {
+  if (JSON.stringify(ids) === JSON.stringify(soundOrder())) return;
+  const previous = state.sounds;
+  state.sounds = ids.map((id) => previous.find((s) => s.id === id));
+  renderSounds();
+  api("PUT", "/api/sounds/order", { ids }).catch((e) => {
+    state.sounds = previous;
+    renderSounds();
+    toast(e.message);
+  });
+}
+
+function setUpSoundReorder(tile, id) {
+  tile.addEventListener("dragstart", (e) => {
+    soundDragId = id;
+    soundDropped = false;
+    tile.classList.add("dragging");
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("application/x-sound", id);
+  });
+  tile.addEventListener("dragend", () => {
+    tile.classList.remove("dragging");
+    soundDragId = null;
+    if (soundDropped) saveSoundOrder([...document.querySelectorAll("#sounds .sound")].map((n) => n.dataset.id));
+    else {
+      lastSoundsRender = ""; // cancelled: put the tiles back
+      renderSounds();
+    }
+  });
+  tile.addEventListener("keydown", (e) => {
+    const step = e.altKey && { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[e.key];
+    if (!step) return;
+    e.preventDefault();
+    const ids = soundOrder();
+    const from = ids.indexOf(id);
+    const to = from + step;
+    if (to < 0 || to >= ids.length) return;
+    [ids[from], ids[to]] = [ids[to], ids[from]];
+    saveSoundOrder(ids);
+  });
+}
+
+$("#sounds").addEventListener("dragover", (e) => {
+  if (!soundDragId) return;
+  e.preventDefault();
+  const dragged = document.querySelector(`#sounds .sound[data-id="${CSS.escape(soundDragId)}"]`);
+  const target = e.target.closest(".sound");
+  if (!dragged || !target || target === dragged) return;
+  // Towards the end lands after the target, towards the start before it.
+  const tiles = [...target.parentNode.children];
+  const after = tiles.indexOf(dragged) < tiles.indexOf(target);
+  target.parentNode.insertBefore(dragged, after ? target.nextSibling : target);
+});
+$("#sounds").addEventListener("drop", (e) => {
+  if (!soundDragId) return;
+  e.preventDefault();
+  soundDropped = true;
+});
 
 function updatePlaying(ids) {
   playing = new Set(ids);

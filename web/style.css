@@ -252,6 +252,7 @@ dialog::backdrop { background: rgb(0 0 0 / .5); }
   border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2);
 }
 .sound:hover { border-color: var(--accent); }
+.sound.dragging { opacity: .45; }
 .sound button { border: none; background: transparent; }
 .sound button:focus-visible { outline-offset: -2px; }
 .sound .play {

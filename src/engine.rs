@@ -980,15 +980,16 @@ impl Engine {
     /// Reorders sources to match `ids`, which must list every source once.
     pub fn reorder_sources(&self, ids: &[String]) -> anyhow::Result<()> {
         let mut inner = self.inner.lock().unwrap();
-        let current: HashSet<&String> = inner.config.sources.iter().map(|s| &s.id).collect();
-        let wanted: HashSet<&String> = ids.iter().collect();
-        if ids.len() != current.len() || current != wanted {
-            bail!("order must list every source exactly once");
-        }
-        inner
-            .config
-            .sources
-            .sort_by_key(|s| ids.iter().position(|id| *id == s.id));
+        reorder(&mut inner.config.sources, ids, |s| &s.id, "source")?;
+        self.bump(&mut inner);
+        Ok(())
+    }
+
+    /// Reorders soundboard sounds to match `ids`, which must list every
+    /// sound once.
+    pub fn reorder_sounds(&self, ids: &[String]) -> anyhow::Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        reorder(&mut inner.config.sounds, ids, |s| &s.id, "sound")?;
         self.bump(&mut inner);
         Ok(())
     }
@@ -1301,6 +1302,22 @@ impl SourceRuntime {
 fn feeds_back(capture: &str, output: &str) -> bool {
     let capture = capture.to_lowercase();
     capture.contains("output") && capture.replacen("output", "input", 1) == output.to_lowercase()
+}
+
+/// Sorts `items` into the order of `ids`, which must name each item once.
+fn reorder<T>(
+    items: &mut [T],
+    ids: &[String],
+    id: impl Fn(&T) -> &String,
+    what: &str,
+) -> anyhow::Result<()> {
+    let current: HashSet<&String> = items.iter().map(&id).collect();
+    let wanted: HashSet<&String> = ids.iter().collect();
+    if ids.len() != current.len() || current != wanted {
+        bail!("order must list every {what} exactly once");
+    }
+    items.sort_by_key(|item| ids.iter().position(|i| i == id(item)));
+    Ok(())
 }
 
 /// Hear sounds plays while it's on, the soundboard is in the mix, and Listen
@@ -1812,6 +1829,26 @@ mod tests {
         engine.add_sound(None, "a.wav", wav()).unwrap();
         let status = wait_hear(&engine, "error");
         assert!(status.message.contains("hear sounds"), "{}", status.message);
+        engine.shutdown();
+    }
+
+    #[test]
+    fn reorder_sounds_requires_every_sound_once() {
+        let engine = engine("cable");
+        let a = engine.add_sound(Some("a".into()), "a.wav", wav()).unwrap();
+        let b = engine.add_sound(Some("b".into()), "b.wav", wav()).unwrap();
+        engine.reorder_sounds(&[b.clone(), a.clone()]).unwrap();
+        let names = |e: &Engine| {
+            e.state()
+                .sounds
+                .iter()
+                .map(|s| s.name.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&engine), ["b", "a"]);
+        assert!(engine.reorder_sounds(&[b.clone()]).is_err());
+        assert!(engine.reorder_sounds(&[b.clone(), b.clone()]).is_err());
+        assert_eq!(names(&engine), ["b", "a"], "rejected orders change nothing");
         engine.shutdown();
     }
 
