@@ -253,7 +253,8 @@ async fn ws(State(app): State<App>, upgrade: WebSocketUpgrade) -> Response {
         stream_updates(socket, app.engine.clone(), connection).await;
         // However the connection ended (tab closed, refreshed, crashed),
         // stop anything it switched on.
-        app.engine.set_listening(connection, false);
+        let engine = app.engine.clone();
+        let _ = tokio::task::spawn_blocking(move || engine.set_listening(connection, false)).await;
     })
 }
 
@@ -289,7 +290,15 @@ async fn stream_updates(mut socket: WebSocket, engine: Arc<Engine>, connection: 
             incoming = socket.recv() => match incoming {
                 Some(Ok(Message::Text(text))) => {
                     match serde_json::from_str::<ClientMessage>(&text) {
-                        Ok(ClientMessage::Listen { on }) => engine.set_listening(connection, on),
+                        Ok(ClientMessage::Listen { on }) => {
+                            // Starting it queries devices, which can block. Awaited
+                            // so one connection's toggles apply in order.
+                            let engine = engine.clone();
+                            let _ = tokio::task::spawn_blocking(move || {
+                                engine.set_listening(connection, on)
+                            })
+                            .await;
+                        }
                         Err(e) => tracing::debug!("ignoring websocket message {text:?}: {e}"),
                     }
                     continue;
