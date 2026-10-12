@@ -6,7 +6,7 @@
 //! * A supervisor thread (re)starts captures when apps launch/exit or devices
 //!   come and go, and persists configuration changes.
 
-use crate::backend::{Backend, CaptureTarget, NullRender, RenderStream};
+use crate::backend::{Backend, CaptureTarget, DeviceInfo, NullRender, RenderStream};
 use crate::config::{
     Channel, Config, DeviceRef, Hotkey, SourceConfig, SourceKind, db_to_gain, new_id,
 };
@@ -102,6 +102,10 @@ struct Inner {
     listeners: HashSet<u64>,
     monitor: Option<Worker>,
     monitor_status: SharedStatus,
+    /// (default output id, mix output id) the monitor was last set up for;
+    /// a change means it must be re-checked and restarted.
+    monitor_key: Option<(Option<String>, Option<String>)>,
+    monitor_retry_at: Instant,
     dirty: bool,
     save_error: Option<String>,
 }
@@ -180,6 +184,8 @@ impl Engine {
                 listeners: HashSet::new(),
                 monitor: None,
                 monitor_status: Arc::new(Mutex::new(Status::new("idle", ""))),
+                monitor_key: None,
+                monitor_retry_at: Instant::now(),
                 dirty: false,
                 save_error: None,
             }),
@@ -499,37 +505,87 @@ impl Engine {
 
     /// Turns Listen on/off for one UI connection. The mix plays on the
     /// Windows default output while any connection has it on, so closing
-    /// the tab (which drops its connection) always stops it.
+    /// every tab that turned it on (which drops their connections) stops it.
+    /// The supervisor keeps the monitor running: it restarts it after errors
+    /// and when the default output or the mix output changes. May block
+    /// briefly on device queries, so call it off the async executor.
     pub fn set_listening(&self, connection: u64, on: bool) {
-        let mut inner = self.inner.lock().unwrap();
-        let was = !inner.listeners.is_empty();
-        if on {
-            inner.listeners.insert(connection);
-        } else {
-            inner.listeners.remove(&connection);
-        }
-        let now = !inner.listeners.is_empty();
-        if was == now {
+        if on && self.shutdown.load(Ordering::Relaxed) {
             return;
         }
-        if now {
-            self.start_monitor(&mut inner);
-        } else {
-            self.stop_monitor(&mut inner);
+        let started = {
+            let mut inner = self.inner.lock().unwrap();
+            let was = !inner.listeners.is_empty();
+            if on {
+                inner.listeners.insert(connection);
+            } else {
+                inner.listeners.remove(&connection);
+            }
+            let now = !inner.listeners.is_empty();
+            if was && !now {
+                self.stop_monitor(&mut inner);
+                self.changed.send_modify(|v| *v += 1);
+            }
+            !was && now
+        };
+        if started {
+            // Start it now rather than at the next supervisor tick.
+            self.supervise();
         }
-        self.changed.send_modify(|v| *v += 1);
     }
 
-    fn start_monitor(&self, inner: &mut Inner) {
+    /// Starts, restarts or refuses the monitor as needed. Called by
+    /// supervise() with the current default output; returns whether the
+    /// visible state changed.
+    fn supervise_monitor(
+        &self,
+        inner: &mut Inner,
+        default_output: Option<DeviceInfo>,
+        now: Instant,
+    ) -> bool {
+        if inner.listeners.is_empty() {
+            return false;
+        }
+        let output = inner.config.output.clone();
+        let key = (
+            default_output.as_ref().map(|d| d.id.clone()),
+            output.as_ref().map(|d| d.id.clone()),
+        );
+        if inner.monitor_key.as_ref() == Some(&key) {
+            match &inner.monitor {
+                Some(w) if !w.finished() => return false, // healthy
+                Some(_) if now < inner.monitor_retry_at => return false,
+                None => return false, // refused; waits for a device change
+                Some(_) => {}         // failed: retry
+            }
+        }
+        self.stop_monitor(inner);
+        inner.monitor_key = Some(key);
+        inner.monitor_retry_at = now + RETRY_DELAY;
+        match default_output {
+            None => refuse_monitor(inner, "No default output device to listen on".into()),
+            Some(dev) if output.as_ref().is_some_and(|o| o.id == dev.id) => refuse_monitor(
+                inner,
+                format!(
+                    "Your Windows default output is “{}”, which the mix already goes to. \
+                     Set your headphones as the default output to listen.",
+                    dev.name
+                ),
+            ),
+            Some(dev) => self.start_monitor(inner, dev),
+        }
+        true
+    }
+
+    fn start_monitor(&self, inner: &mut Inner, device: DeviceInfo) {
         let (tx, rx) = source_ring();
         *self.tap.lock().unwrap() = Some(tx);
         let status = Arc::new(Mutex::new(Status::new("waiting", "Starting…")));
         inner.monitor_status = status.clone();
         let backend = self.backend.clone();
-        let output_id = inner.config.output.as_ref().map(|d| d.id.clone());
         let changed = self.changed.clone();
         inner.monitor = Some(Worker::spawn("monitor".into(), move |stop| {
-            monitor_thread(&*backend, rx, output_id, &status, &stop, &changed)
+            monitor_thread(&*backend, rx, device, &status, &stop, &changed)
         }));
     }
 
@@ -538,6 +594,7 @@ impl Engine {
         if let Some(w) = inner.monitor.take() {
             w.stop();
         }
+        inner.monitor_key = None;
         inner.monitor_status = Arc::new(Mutex::new(Status::new("idle", "")));
     }
 
@@ -570,7 +627,7 @@ impl Engine {
         let now = Instant::now();
 
         // 1. Snapshot under the lock.
-        let (sources, pids, wants_default, to_resolve) = {
+        let (sources, pids, wants_default, to_resolve, listening) = {
             let inner = self.inner.lock().unwrap();
             let mut pids = Vec::new();
             let mut wants_default = false;
@@ -592,6 +649,7 @@ impl Engine {
                 pids,
                 wants_default,
                 to_resolve,
+                !inner.listeners.is_empty(),
             )
         };
 
@@ -599,6 +657,7 @@ impl Engine {
         let default_input = wants_default
             .then(|| self.backend.default_input())
             .flatten();
+        let default_output = listening.then(|| self.backend.default_output()).flatten();
         let alive: HashMap<u32, bool> = pids
             .into_iter()
             .map(|pid| (pid, self.backend.process_alive(pid)))
@@ -619,6 +678,7 @@ impl Engine {
             self.restart_output(&mut inner);
             changed = true;
         }
+        changed |= self.supervise_monitor(&mut inner, default_output, now);
         let output_name = inner.config.output.as_ref().map(|o| o.name.clone());
         for src in &sources {
             let Some(rt) = inner.sources.get_mut(&src.id) else {
@@ -792,6 +852,12 @@ fn feeds_back(capture: &str, output: &str) -> bool {
     capture.contains("output") && capture.replacen("output", "input", 1) == output.to_lowercase()
 }
 
+/// Shows why Listen can't run; the supervisor re-checks when devices change.
+fn refuse_monitor(inner: &mut Inner, message: String) {
+    tracing::warn!("listen: {message}");
+    inner.monitor_status = Arc::new(Mutex::new(Status::new("error", message)));
+}
+
 fn display_exe(exe: &str) -> String {
     let stem = exe.trim().trim_end_matches(".exe").trim_end_matches(".EXE");
     let mut chars = stem.chars();
@@ -904,32 +970,29 @@ fn render_thread(
 fn monitor_thread(
     backend: &dyn Backend,
     rx: rtrb::Consumer<f32>,
-    output_id: Option<String>,
+    dev: DeviceInfo,
     status: &SharedStatus,
     stop: &AtomicBool,
     changed: &tokio::sync::watch::Sender<u64>,
 ) {
+    // Once stopped (replaced or turned off), stay quiet. Errors end the
+    // thread; the supervisor retries.
     let fail = |msg: String| {
         tracing::warn!("listen: {msg}");
-        set_status(status, "error", msg);
-        changed.send_modify(|v| *v += 1);
+        if !stop.load(Ordering::Relaxed) {
+            set_status(status, "error", msg);
+            changed.send_modify(|v| *v += 1);
+        }
     };
     backend.promote_audio_thread();
-    let Some(dev) = backend.default_output() else {
-        return fail("No default output device to listen on".into());
-    };
-    if output_id.as_ref() == Some(&dev.id) {
-        return fail(format!(
-            "Your Windows default output is “{}”, which the mix already goes to. \
-             Set your headphones as the default output to listen.",
-            dev.name
-        ));
-    }
     let mut stream = match backend.open_render(&dev.id) {
         Ok(s) => s,
         Err(e) => return fail(format!("{}: {e:#}", dev.name)),
     };
     tracing::info!("listen: playing the mix on {:?}", dev.name);
+    if stop.load(Ordering::Relaxed) {
+        return;
+    }
     set_status(status, "running", dev.name);
     changed.send_modify(|v| *v += 1);
 
@@ -946,6 +1009,162 @@ fn monitor_thread(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::{AppInfo, CaptureStream};
+
+    /// Two outputs ("cable", "phones"; phones is the Windows default), no
+    /// inputs or apps, and renders that just tick.
+    struct TestBackend;
+
+    impl Backend for TestBackend {
+        fn input_devices(&self) -> anyhow::Result<Vec<DeviceInfo>> {
+            Ok(Vec::new())
+        }
+        fn output_devices(&self) -> anyhow::Result<Vec<DeviceInfo>> {
+            Ok(vec![device("cable"), device("phones")])
+        }
+        fn default_input(&self) -> Option<DeviceInfo> {
+            None
+        }
+        fn default_output(&self) -> Option<DeviceInfo> {
+            Some(device("phones"))
+        }
+        fn audio_apps(&self) -> anyhow::Result<Vec<AppInfo>> {
+            Ok(Vec::new())
+        }
+        fn find_process(&self, _exe: &str) -> Option<u32> {
+            None
+        }
+        fn process_alive(&self, _pid: u32) -> bool {
+            false
+        }
+        fn open_capture(&self, _target: &CaptureTarget) -> anyhow::Result<Box<dyn CaptureStream>> {
+            bail!("no captures in tests")
+        }
+        fn open_render(&self, _device_id: &str) -> anyhow::Result<Box<dyn RenderStream>> {
+            Ok(Box::new(NullRender::default()))
+        }
+    }
+
+    fn device(id: &str) -> DeviceInfo {
+        DeviceInfo {
+            id: id.into(),
+            name: id.into(),
+            is_default: id == "phones",
+        }
+    }
+
+    /// An engine with app sources "a", "b", "c" mixing to `output`. Its config
+    /// is saved under a temp dir, never the user's.
+    fn engine(output: &str) -> Arc<Engine> {
+        static ISOLATE: std::sync::Once = std::sync::Once::new();
+        ISOLATE.call_once(|| {
+            let dir = std::env::temp_dir().join(format!("vam-tests-{}", std::process::id()));
+            // SAFETY: set once, before any test reads the environment.
+            unsafe {
+                std::env::set_var("APPDATA", &dir);
+                std::env::set_var("XDG_CONFIG_HOME", &dir);
+            }
+        });
+        let sources = ["a", "b", "c"]
+            .map(|id| SourceConfig {
+                id: id.into(),
+                name: id.into(),
+                kind: SourceKind::App {
+                    exe: format!("{id}.exe"),
+                },
+                channel: Channel::default(),
+            })
+            .to_vec();
+        let config = Config {
+            output: Some(DeviceRef {
+                id: output.into(),
+                name: output.into(),
+            }),
+            sources,
+            ..Config::default()
+        };
+        Engine::new(Box::new(TestBackend), config)
+    }
+
+    fn order(engine: &Engine) -> Vec<String> {
+        engine.state().sources.into_iter().map(|s| s.id).collect()
+    }
+
+    fn ids(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Waits up to 3 s (the supervisor ticks every 500 ms) for a state.
+    fn wait_monitor(engine: &Engine, state: &str) -> Status {
+        for _ in 0..300 {
+            let status = engine.state().monitor;
+            if status.state == state {
+                return status;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        engine.state().monitor
+    }
+
+    #[test]
+    fn reorder_requires_every_source_once() {
+        let engine = engine("cable");
+        engine.reorder_sources(&ids(&["c", "a", "b"])).unwrap();
+        assert_eq!(order(&engine), ids(&["c", "a", "b"]));
+        for bad in [&["c", "c", "a"][..], &["c", "a"], &["c", "a", "zz"], &[]] {
+            assert!(engine.reorder_sources(&ids(bad)).is_err(), "{bad:?}");
+        }
+        assert_eq!(
+            order(&engine),
+            ids(&["c", "a", "b"]),
+            "rejected orders change nothing"
+        );
+        engine.shutdown();
+    }
+
+    #[test]
+    fn listen_runs_while_any_connection_has_it_on() {
+        let engine = engine("cable");
+        assert_eq!(engine.state().monitor.state, "idle");
+        engine.set_listening(1, true);
+        assert_eq!(wait_monitor(&engine, "running").state, "running");
+        engine.set_listening(2, true);
+        engine.set_listening(1, false);
+        assert_eq!(
+            engine.state().monitor.state,
+            "running",
+            "connection 2 still listening"
+        );
+        engine.set_listening(7, false); // never turned it on: no effect
+        assert_eq!(engine.state().monitor.state, "running");
+        engine.set_listening(2, false);
+        assert_eq!(engine.state().monitor.state, "idle");
+
+        engine.shutdown();
+        engine.set_listening(3, true);
+        assert_eq!(
+            engine.state().monitor.state,
+            "idle",
+            "ignored after shutdown"
+        );
+    }
+
+    #[test]
+    fn listen_refuses_when_the_mix_already_goes_to_the_default_output() {
+        let engine = engine("phones");
+        engine.set_listening(1, true);
+        let status = wait_monitor(&engine, "error");
+        assert_eq!(status.state, "error");
+        assert!(status.message.contains("phones"), "{}", status.message);
+
+        // Moving the mix to the cable lets it start without toggling Listen.
+        engine.set_output(Some(DeviceRef {
+            id: "cable".into(),
+            name: "cable".into(),
+        }));
+        assert_eq!(wait_monitor(&engine, "running").state, "running");
+        engine.shutdown();
+    }
 
     #[test]
     fn detects_virtual_cable_loopback() {
