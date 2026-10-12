@@ -227,14 +227,24 @@ dialog::backdrop { background: rgb(0 0 0 / .5); }
 
 .sounds { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; margin-top: 12px; }
 .sounds:empty { display: none; }
-.sound { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px; align-items: center; }
+/* One box per sound: the play button fills it, the settings cog sits inside on the right. */
+.sound {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2);
+}
+.sound:hover { border-color: var(--accent); }
+.sound button { border: none; background: transparent; }
+.sound button:focus-visible { outline-offset: -2px; }
 .sound .play {
-  display: flex; align-items: center; gap: 8px; min-height: 44px; text-align: left; min-width: 0;
+  display: flex; align-items: center; gap: 8px; min-height: 44px; min-width: 0;
+  padding: 6px 4px 6px 12px; text-align: left;
 }
 .sound .play-icon { color: var(--accent); flex: none; }
 .sound .sound-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sound.playing .play { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, var(--panel-2)); }
-.sound-error { grid-column: 1 / -1; font-size: 12px; color: var(--muted); }
+.sound .edit { margin-right: 6px; padding: 4px 6px; font-size: 16px; line-height: 1; color: var(--muted); border-radius: 6px; }
+.sound .edit:hover { color: var(--text); background: color-mix(in srgb, var(--accent) 15%, transparent); }
+.sound.playing { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, var(--panel-2)); }
+.sound-error { grid-column: 1 / -1; padding: 0 12px 8px; font-size: 12px; color: var(--muted); }
 .sound.error .sound-error { color: var(--bad); }
 #soundboard.drop-target { outline: 2px dashed var(--accent); outline-offset: -2px; }
 .dialog-actions .spacer { flex: 1; }
