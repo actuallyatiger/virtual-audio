@@ -18,6 +18,9 @@ const DRIFT_DEADBAND: f32 = 240.0;
 const FILL_SMOOTHING: f32 = 0.01;
 /// If a source gets this far ahead (e.g. after a stall) it is trimmed back.
 const MAX_FRAMES: usize = 4_800;
+/// Largest render period we pre-allocate for (100 ms; WASAPI uses ~10-20 ms),
+/// so the audio thread doesn't hit the allocator.
+const MAX_BLOCK_FRAMES: usize = 4_800;
 /// Ring buffer size in samples (0.5 s of stereo audio).
 pub const RING_SAMPLES: usize = SAMPLE_RATE as usize;
 
@@ -122,8 +125,8 @@ impl Mixer {
             inputs: Vec::new(),
             master,
             master_gain,
-            scratch: Vec::new(),
-            read_buf: Vec::new(),
+            scratch: Vec::with_capacity(MAX_BLOCK_FRAMES * CHANNELS),
+            read_buf: Vec::with_capacity((MAX_BLOCK_FRAMES + 1) * CHANNELS),
         }
     }
 
