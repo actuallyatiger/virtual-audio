@@ -14,6 +14,8 @@ pub struct Config {
     pub master: Channel,
     pub sources: Vec<SourceConfig>,
     pub hotkeys: Vec<Hotkey>,
+    /// Soundboard sounds, in display order.
+    pub sounds: Vec<SoundConfig>,
 }
 
 impl Default for Config {
@@ -24,6 +26,7 @@ impl Default for Config {
             master: Channel::default(),
             sources: Vec::new(),
             hotkeys: Vec::new(),
+            sounds: Vec::new(),
         }
     }
 }
@@ -58,6 +61,39 @@ pub struct SourceConfig {
     pub kind: SourceKind,
     #[serde(flatten)]
     pub channel: Channel,
+    /// Only used by device sources.
+    #[serde(flatten)]
+    pub processing: Processing,
+}
+
+/// Microphone clean-up (see [`crate::dsp`]).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Processing {
+    pub noise_suppression: bool,
+    pub noise_gate: bool,
+    /// The gate opens when the level reaches this (dBFS).
+    pub gate_db: f32,
+}
+
+impl Default for Processing {
+    fn default() -> Self {
+        Self {
+            noise_suppression: false,
+            noise_gate: false,
+            gate_db: -45.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SoundConfig {
+    pub id: String,
+    pub name: String,
+    /// File name inside the `sounds` folder of the data directory.
+    pub file: String,
+    #[serde(default)]
+    pub gain_db: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -70,6 +106,8 @@ pub enum SourceKind {
     /// Audio rendered by a process (and its child processes), matched by
     /// executable name so it survives app restarts.
     App { exe: String },
+    /// The built-in soundboard (at most one).
+    Soundboard,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -78,7 +116,9 @@ pub struct Hotkey {
     /// e.g. "Ctrl+Shift+M", "Mouse5", "F13".
     pub keys: String,
     pub action: HotkeyAction,
-    /// "master" or a source id.
+    /// "master" or a source id; a sound id for `PlaySound`; unused by
+    /// `StopSounds`.
+    #[serde(default)]
     pub target: String,
 }
 
@@ -90,6 +130,8 @@ pub enum HotkeyAction {
     PushToTalk,
     /// Target is silent while the keys are held.
     PushToMute,
+    PlaySound,
+    StopSounds,
 }
 
 pub fn data_dir() -> PathBuf {
@@ -188,6 +230,7 @@ mod tests {
                 gain_db: -3.0,
                 muted: true,
             },
+            processing: Processing::default(),
         };
         let json = serde_json::to_value(&s).unwrap();
         assert_eq!(json["kind"], "app");
@@ -195,6 +238,15 @@ mod tests {
         assert_eq!(json["gain_db"], -3.0);
         let back: SourceConfig = serde_json::from_value(json).unwrap();
         assert_eq!(back.kind, s.kind);
+
+        // Configs from before processing settings existed still load.
+        let old =
+            r#"{"id":"m","name":"Mic","kind":"device","device":null,"gain_db":0,"muted":false}"#;
+        let old: SourceConfig = serde_json::from_str(old).unwrap();
+        assert_eq!(old.processing, Processing::default());
+        let board: SourceConfig =
+            serde_json::from_str(r#"{"id":"b","name":"Board","kind":"soundboard"}"#).unwrap();
+        assert_eq!(board.kind, SourceKind::Soundboard);
     }
 
     #[test]

@@ -101,7 +101,7 @@ pub fn gate_states<'a>(hotkeys: impl Iterator<Item = (&'a Hotkey, bool)>) -> Has
                 entry.1 |= held;
             }
             HotkeyAction::PushToMute => entry.2 |= held,
-            HotkeyAction::ToggleMute => {}
+            HotkeyAction::ToggleMute | HotkeyAction::PlaySound | HotkeyAction::StopSounds => {}
         }
     }
     acc.into_iter()
@@ -112,22 +112,27 @@ pub fn gate_states<'a>(hotkeys: impl Iterator<Item = (&'a Hotkey, bool)>) -> Has
 /// Last seen (keys, held) per hotkey id.
 type PrevHeld = HashMap<String, (String, bool)>;
 
-/// Targets of toggle-mute hotkeys that were just pressed. A binding that is
-/// new or whose keys changed starts from its current state, so recording new
-/// keys (which are still held when saved) doesn't count as a press.
-fn toggle_presses<'a>(
+/// Press-triggered hotkeys (toggle mute, play sound, stop sounds) that were
+/// just pressed. A binding that is new or whose keys changed starts from its
+/// current state, so recording new keys (which are still held when saved)
+/// doesn't count as a press.
+fn presses<'a>(
     prev: &mut PrevHeld,
     hotkeys: impl Iterator<Item = &'a Hotkey>,
     held: &[bool],
-) -> Vec<String> {
+) -> Vec<&'a Hotkey> {
     let mut pressed = Vec::new();
     for (hk, &is_held) in hotkeys.zip(held) {
         let was = match prev.insert(hk.id.clone(), (hk.keys.clone(), is_held)) {
             Some((keys, was)) if keys == hk.keys => was,
             _ => is_held,
         };
-        if hk.action == HotkeyAction::ToggleMute && is_held && !was {
-            pressed.push(hk.target.clone());
+        let on_press = matches!(
+            hk.action,
+            HotkeyAction::ToggleMute | HotkeyAction::PlaySound | HotkeyAction::StopSounds
+        );
+        if on_press && is_held && !was {
+            pressed.push(hk);
         }
     }
     pressed
@@ -176,8 +181,17 @@ fn poll_loop(engine: Arc<Engine>) {
             .map(|(_, combo)| combo.iter().all(|any| any.iter().any(|&vk| key_down(vk))))
             .collect();
 
-        for target in toggle_presses(&mut prev_held, bindings.iter().map(|(h, _)| h), &held) {
-            engine.toggle_mute(&target);
+        for hk in presses(&mut prev_held, bindings.iter().map(|(h, _)| h), &held) {
+            match hk.action {
+                HotkeyAction::ToggleMute => engine.toggle_mute(&hk.target),
+                HotkeyAction::PlaySound => {
+                    if let Err(e) = engine.play_sound(&hk.target) {
+                        tracing::warn!("hotkey {}: {e:#}", hk.keys);
+                    }
+                }
+                HotkeyAction::StopSounds => engine.stop_sounds(),
+                HotkeyAction::PushToTalk | HotkeyAction::PushToMute => {}
+            }
         }
 
         let gates = gate_states(bindings.iter().map(|(h, _)| h).zip(held.iter().copied()));
@@ -225,7 +239,12 @@ mod tests {
         let mut prev = PrevHeld::new();
         let mut hk = hk(HotkeyAction::ToggleMute, "mic");
         hk.id = "h1".into();
-        let mut press = |hk: &Hotkey, held| toggle_presses(&mut prev, std::iter::once(hk), &[held]);
+        let mut press = |hk: &Hotkey, held| {
+            presses(&mut prev, std::iter::once(hk), &[held])
+                .into_iter()
+                .map(|h| h.target.clone())
+                .collect::<Vec<_>>()
+        };
 
         assert!(press(&hk, false).is_empty(), "first sight, not held");
         assert_eq!(press(&hk, true), vec!["mic"], "press");
@@ -237,6 +256,14 @@ mod tests {
         assert!(press(&hk, true).is_empty(), "keys changed while held");
         assert!(press(&hk, false).is_empty());
         assert_eq!(press(&hk, true), vec!["mic"], "next real press toggles");
+
+        // Sound hotkeys fire on press too; push-to-talk never does.
+        hk.action = HotkeyAction::PlaySound;
+        assert!(press(&hk, false).is_empty());
+        assert_eq!(press(&hk, true), vec!["mic"]);
+        hk.action = HotkeyAction::PushToTalk;
+        assert!(press(&hk, false).is_empty());
+        assert!(press(&hk, true).is_empty());
     }
 
     #[test]

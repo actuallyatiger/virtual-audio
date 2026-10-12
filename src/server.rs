@@ -2,10 +2,12 @@
 
 use crate::backend::PLATFORM_SUPPORTED;
 use crate::config::{DeviceRef, Hotkey, SourceKind};
-use crate::engine::{ChannelPatch, Engine};
+use crate::engine::{ChannelPatch, Engine, SoundPatch};
 use crate::platform;
+use crate::soundboard::MAX_FILE_BYTES;
+use axum::body::Bytes;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, Request, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -77,6 +79,15 @@ pub fn router(engine: Arc<Engine>, port: u16, quit: Arc<dyn Fn() + Send + Sync>)
         .route("/api/output", put(set_output))
         .route("/api/hotkeys", put(set_hotkeys))
         .route("/api/settings", put(set_settings))
+        .route(
+            "/api/sounds",
+            // Room for the file plus a little slack, so an oversized file
+            // gets the engine's friendlier error.
+            post(add_sound).layer(DefaultBodyLimit::max(MAX_FILE_BYTES + 1024)),
+        )
+        .route("/api/sounds/stop", post(stop_sounds))
+        .route("/api/sounds/{id}", patch(update_sound).delete(remove_sound))
+        .route("/api/sounds/{id}/play", post(play_sound))
         .route("/api/quit", post(quit_app))
         .route("/ws", get(ws))
         .layer(middleware::from_fn_with_state(app.clone(), guard))
@@ -225,6 +236,47 @@ async fn set_hotkeys(State(app): State<App>, Json(body): Json<Vec<Hotkey>>) -> A
 }
 
 #[derive(Deserialize)]
+struct Upload {
+    name: Option<String>,
+    /// The file's original name, for its extension and the default name.
+    #[serde(default)]
+    filename: String,
+}
+
+/// The request body is the raw file.
+async fn add_sound(State(app): State<App>, Query(upload): Query<Upload>, body: Bytes) -> ApiResult {
+    let id = blocking(&app, StatusCode::BAD_REQUEST, move |e| {
+        e.add_sound(upload.name, &upload.filename, body.to_vec())
+    })
+    .await?;
+    Ok(Json(json!({ "id": id })).into_response())
+}
+
+async fn update_sound(
+    State(app): State<App>,
+    Path(id): Path<String>,
+    Json(body): Json<SoundPatch>,
+) -> ApiResult {
+    app.engine.update_sound(&id, body).map_err(bad)?;
+    ok()
+}
+
+async fn remove_sound(State(app): State<App>, Path(id): Path<String>) -> ApiResult {
+    app.engine.remove_sound(&id).map_err(bad)?;
+    ok()
+}
+
+async fn play_sound(State(app): State<App>, Path(id): Path<String>) -> ApiResult {
+    app.engine.play_sound(&id).map_err(bad)?;
+    ok()
+}
+
+async fn stop_sounds(State(app): State<App>) -> ApiResult {
+    app.engine.stop_sounds();
+    ok()
+}
+
+#[derive(Deserialize)]
 struct Settings {
     autostart: Option<bool>,
 }
@@ -281,7 +333,11 @@ async fn stream_updates(mut socket: WebSocket, engine: Arc<Engine>, connection: 
     }
     loop {
         let msg = tokio::select! {
-            _ = tick.tick() => json!({ "type": "meters", "meters": engine.meters() }),
+            _ = tick.tick() => json!({
+                "type": "meters",
+                "meters": engine.meters(),
+                "playing": engine.playing_sounds(),
+            }),
             changed = changes.changed() => {
                 if changed.is_err() { return; }
                 changes.borrow_and_update();
