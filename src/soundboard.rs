@@ -7,8 +7,9 @@
 //! correction all work as they do for a microphone.
 
 use crate::backend::CaptureStream;
+use crate::decode::{AUDIO_EXTENSIONS, TrackDecoder};
 use crate::mixer::{CHANNELS, MonitorTap, SAMPLE_RATE, push_frames};
-use anyhow::{Context, anyhow, bail};
+use anyhow::bail;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -44,171 +45,36 @@ pub fn sound_path(file: &str) -> anyhow::Result<PathBuf> {
 /// The extension to store an upload under: its own if it's a known audio
 /// type (it helps the decoder guess the format), otherwise "bin".
 pub fn extension(filename: &str) -> String {
-    const KNOWN: &[&str] = &[
-        "mp3", "wav", "ogg", "oga", "flac", "m4a", "mp4", "aac", "mka", "mkv", "webm",
-    ];
     let ext = std::path::Path::new(filename)
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
-    if KNOWN.contains(&ext.as_str()) {
+    if AUDIO_EXTENSIONS.contains(&ext.as_str()) {
         ext
     } else {
         "bin".into()
     }
 }
 
-/// Decodes an audio file (MP3, WAV, OGG Vorbis, FLAC, M4A/AAC, …) to
-/// interleaved stereo f32 at [`SAMPLE_RATE`].
+/// Decodes a whole audio file (MP3, WAV, OGG Vorbis, FLAC, M4A/AAC, …)
+/// to interleaved stereo f32 at [`SAMPLE_RATE`].
 pub fn decode(bytes: Vec<u8>, extension: Option<&str>) -> anyhow::Result<Vec<f32>> {
-    use symphonia::core::audio::SampleBuffer;
-    use symphonia::core::codecs::{CODEC_TYPE_NULL, DecoderOptions};
-    use symphonia::core::errors::Error;
-    use symphonia::core::formats::FormatOptions;
-    use symphonia::core::io::MediaSourceStream;
-    use symphonia::core::meta::MetadataOptions;
-    use symphonia::core::probe::Hint;
-
-    let mss = MediaSourceStream::new(Box::new(std::io::Cursor::new(bytes)), Default::default());
-    let mut hint = Hint::new();
-    if let Some(ext) = extension {
-        hint.with_extension(ext);
-    }
-    let probed = symphonia::default::get_probe()
-        .format(
-            &hint,
-            mss,
-            &FormatOptions::default(),
-            &MetadataOptions::default(),
-        )
-        .map_err(|_| anyhow!("not a supported audio file (use MP3, WAV, OGG, FLAC or M4A)"))?;
-    let mut format = probed.format;
-    let track = format
-        .tracks()
-        .iter()
-        .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
-        .ok_or_else(|| anyhow!("the file has no audio"))?;
-    let track_id = track.id;
-    let mut decoder = symphonia::default::get_codecs()
-        .make(&track.codec_params, &DecoderOptions::default())
-        .map_err(|_| {
-            anyhow!("this file's audio format isn't supported (use MP3, WAV, OGG, FLAC or M4A)")
-        })?;
-
+    let mut track = TrackDecoder::open(Box::new(std::io::Cursor::new(bytes)), extension)?;
     let mut stereo = Vec::new();
-    let mut rate = None;
-    loop {
-        let packet = match format.next_packet() {
-            Ok(p) => p,
-            Err(Error::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-            Err(Error::ResetRequired) => break,
-            Err(e) => return Err(e).context("reading the file"),
-        };
-        if packet.track_id() != track_id {
-            continue;
-        }
-        let decoded = match decoder.decode(&packet) {
-            Ok(d) => d,
-            // A corrupt packet: skip it, as players do.
-            Err(Error::DecodeError(_)) => continue,
-            Err(e) => return Err(e).context("decoding the file"),
-        };
-        let spec = *decoded.spec();
-        // Also bounds the resampler's work and memory for a corrupt header.
-        if !(8_000..=384_000).contains(&spec.rate) {
-            bail!("unsupported sample rate ({} Hz)", spec.rate);
-        }
-        if *rate.get_or_insert(spec.rate) != spec.rate {
-            bail!("the sample rate changes partway through the file");
-        }
-        let mut buf = SampleBuffer::<f32>::new(decoded.capacity() as u64, spec);
-        buf.copy_interleaved_ref(decoded);
-        let channels = spec.channels.count();
-        for frame in buf.samples().chunks_exact(channels) {
-            let (l, r) = match frame {
-                [m] => (*m, *m),
-                [l, r, ..] => (*l, *r),
-                [] => unreachable!(),
-            };
-            stereo.extend([l, r]);
-        }
-        if stereo.len() as u64 / CHANNELS as u64 > MAX_SECONDS * spec.rate as u64 {
+    let max = MAX_SECONDS as usize * SAMPLE_RATE as usize * CHANNELS;
+    while track.next(&mut stereo)? {
+        if stereo.len() > max {
             bail!("sounds can be at most {MAX_SECONDS} seconds long");
         }
     }
-    let rate = rate.ok_or_else(|| anyhow!("the file has no audio"))?;
-    if stereo.is_empty() {
+    if !track.has_audio() || stereo.is_empty() {
         bail!("the file has no audio");
     }
-    Ok(resample(&stereo, rate))
-}
-
-fn gcd(a: u32, b: u32) -> u32 {
-    if b == 0 { a } else { gcd(b, a % b) }
-}
-
-/// Converts interleaved stereo from `from` Hz to [`SAMPLE_RATE`] with a
-/// windowed-sinc (Blackman) filter, using a precomputed kernel per phase.
-fn resample(input: &[f32], from: u32) -> Vec<f32> {
-    let to = SAMPLE_RATE;
-    if from == to || from == 0 {
-        return input.to_vec();
+    if stereo.len() > max {
+        bail!("sounds can be at most {MAX_SECONDS} seconds long");
     }
-    let g = gcd(from, to);
-    let (up, down) = ((to / g) as usize, (from / g) as usize);
-    // Cut off just below the lower of the two Nyquist frequencies, as a
-    // fraction of the input's.
-    let cutoff = (to as f64 / from as f64).min(1.0) * 0.95;
-    let half = (16.0 / cutoff).ceil() as usize;
-    let taps = 2 * half;
-    let mut table = vec![0f32; up * taps];
-    for (phase, row) in table.chunks_exact_mut(taps).enumerate() {
-        let frac = phase as f64 / up as f64;
-        let mut sum = 0.0;
-        let mut kernel = vec![0f64; taps];
-        for (j, k) in kernel.iter_mut().enumerate() {
-            // Distance from the output position to input sample j.
-            let t = frac + half as f64 - 1.0 - j as f64;
-            let x = std::f64::consts::PI * cutoff * t;
-            let sinc = if x.abs() < 1e-9 { 1.0 } else { x.sin() / x };
-            let u = t / half as f64;
-            let window = if u.abs() >= 1.0 {
-                0.0
-            } else {
-                0.42 + 0.5 * (std::f64::consts::PI * u).cos()
-                    + 0.08 * (2.0 * std::f64::consts::PI * u).cos()
-            };
-            *k = cutoff * sinc * window;
-            sum += *k;
-        }
-        // Normalise each phase to unity gain so there is no DC ripple.
-        for (r, k) in row.iter_mut().zip(&kernel) {
-            *r = (k / sum) as f32;
-        }
-    }
-
-    let in_frames = input.len() / CHANNELS;
-    let out_frames = (in_frames as u64 * up as u64 / down as u64) as usize;
-    let mut out = Vec::with_capacity(out_frames * CHANNELS);
-    for n in 0..out_frames {
-        let pos = n as u64 * down as u64;
-        let base = (pos / up as u64) as usize;
-        let row = &table[(pos % up as u64) as usize * taps..][..taps];
-        let first = base as isize + 1 - half as isize;
-        let (mut l, mut r) = (0f32, 0f32);
-        for (j, &k) in row.iter().enumerate() {
-            let i = first + j as isize;
-            if i < 0 || i as usize >= in_frames {
-                continue;
-            }
-            let i = i as usize * CHANNELS;
-            l += input[i] * k;
-            r += input[i + 1] * k;
-        }
-        out.extend([l, r]);
-    }
-    out
+    Ok(stereo)
 }
 
 /// Which part of a sound plays, and its fades, in frames. Non-destructive:
@@ -604,25 +470,6 @@ mod tests {
         let long = vec![0i16; 8_000 * 61];
         let err = decode(wav(8_000, 1, &long), None).unwrap_err();
         assert!(err.to_string().contains("60 seconds"), "{err}");
-    }
-
-    #[test]
-    fn resampling_keeps_a_tone_clean() {
-        // 1 kHz at 44.1 kHz → 48 kHz: still 1 kHz, no loss of level.
-        let input: Vec<f32> = (0..44_100)
-            .flat_map(|i| {
-                let v = (i as f32 * 1000.0 / 44_100.0 * std::f32::consts::TAU).sin() * 0.5;
-                [v, v]
-            })
-            .collect();
-        let out = resample(&input, 44_100);
-        assert_eq!(out.len(), 48_000 * 2);
-        let mut err = 0f32;
-        for n in 1_000..47_000 {
-            let want = (n as f32 * 1000.0 / 48_000.0 * std::f32::consts::TAU).sin() * 0.5;
-            err = err.max((out[n * 2] - want).abs());
-        }
-        assert!(err < 0.005, "max error {err}");
     }
 
     #[test]

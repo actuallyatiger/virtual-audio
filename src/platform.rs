@@ -214,6 +214,65 @@ mod imp {
         }
     }
 
+    /// Shows the Windows file picker (or folder picker) and returns the
+    /// chosen paths; empty if cancelled. Runs on its own thread, which the
+    /// dialog needs as a single-threaded COM apartment.
+    pub fn browse(folders: bool) -> anyhow::Result<Vec<String>> {
+        std::thread::spawn(move || unsafe { pick(folders) })
+            .join()
+            .map_err(|_| anyhow::anyhow!("the file picker crashed"))?
+    }
+
+    unsafe fn pick(folders: bool) -> anyhow::Result<Vec<String>> {
+        use windows::Win32::System::Com::{
+            CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+            CoTaskMemFree, CoUninitialize,
+        };
+        use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
+        use windows::Win32::UI::Shell::{
+            FOS_ALLOWMULTISELECT, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS,
+            FileOpenDialog, IFileOpenDialog, SIGDN_FILESYSPATH,
+        };
+        unsafe {
+            CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
+            let result = (|| -> anyhow::Result<Vec<String>> {
+                let dialog: IFileOpenDialog =
+                    CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)?;
+                let mut options = dialog.GetOptions()? | FOS_ALLOWMULTISELECT | FOS_FORCEFILESYSTEM;
+                if folders {
+                    options |= FOS_PICKFOLDERS;
+                    dialog.SetTitle(w!("Add music folders"))?;
+                } else {
+                    options |= FOS_FILEMUSTEXIST;
+                    dialog.SetTitle(w!("Add music files"))?;
+                    dialog.SetFileTypes(&[COMDLG_FILTERSPEC {
+                        pszName: w!("Audio files"),
+                        pszSpec: w!(
+                            "*.mp3;*.wav;*.ogg;*.oga;*.flac;*.m4a;*.mp4;*.aac;*.mka;*.mkv;*.webm"
+                        ),
+                    }])?;
+                }
+                dialog.SetOptions(options)?;
+                if let Err(e) = dialog.Show(None) {
+                    if e.code() == ERROR_CANCELLED.to_hresult() {
+                        return Ok(Vec::new());
+                    }
+                    return Err(e.into());
+                }
+                let items = dialog.GetResults()?;
+                let mut paths = Vec::new();
+                for i in 0..items.GetCount()? {
+                    let name = items.GetItemAt(i)?.GetDisplayName(SIGDN_FILESYSPATH)?;
+                    paths.push(name.to_string()?);
+                    CoTaskMemFree(Some(name.0 as *const _));
+                }
+                Ok(paths)
+            })();
+            CoUninitialize();
+            result
+        }
+    }
+
     /// Whether this process runs as administrator.
     pub fn is_elevated() -> bool {
         let Some(token) = Token::open() else {
@@ -485,6 +544,10 @@ mod imp {
 
     pub fn is_elevated() -> bool {
         false
+    }
+
+    pub fn browse(_folders: bool) -> anyhow::Result<Vec<String>> {
+        anyhow::bail!("browsing is only available on Windows: type or paste the path instead")
     }
 
     pub fn set_admin_autostart(_enabled: bool) -> anyhow::Result<()> {

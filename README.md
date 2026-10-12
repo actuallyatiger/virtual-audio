@@ -45,6 +45,12 @@ It runs as a small tray app and is controlled from a web page served on
   times), add fades, or **Trim silence** off both ends in one click.
   Trimming doesn't change the file, so **Reset** brings the whole sound
   back. **Preview** plays it only to you, through Hear sounds.
+- **Music**: add folders (searched, with subfolders) or files by path, or
+  with the Windows file picker. Tracks stream from disk one after another,
+  with play/pause, next/previous, seeking, shuffle and repeat (all or one),
+  and hotkeys for play/pause, next and previous. **Turn the music down while
+  I talk** ducks it while your mic hears you. Music is its own mixer channel,
+  and **Hear music** plays it to you at your own volume.
 - **Hear sounds** (on by default): the soundboard also plays on your Windows
   default output, at its own volume, so you hear your own sounds without
   hearing your own voice. It pauses while Listen is on, since Listen
@@ -163,7 +169,9 @@ cargo build --target x86_64-pc-windows-gnu
 | --- | --- |
 | Mixing core: per-source SPSC ring buffers, gain ramps, meters, soft limiter | `src/mixer.rs` |
 | Mic processing: RNNoise noise suppression, and a noise gate driven by RNNoise's voice detector or a level | `src/dsp.rs` |
-| Soundboard: file decoding (Symphonia), resampling to 48 kHz, playback | `src/soundboard.rs` |
+| Audio file decoding (Symphonia) and streaming resampling to 48 kHz | `src/decode.rs` |
+| Soundboard: sounds in memory, trims, playback | `src/soundboard.rs` |
+| Music: playlist, a decode thread streaming tracks from disk, ducking | `src/music.rs` |
 | Engine: config, capture/render/monitor threads, supervisor that restarts captures, output and Listen as apps/devices come and go | `src/engine.rs` |
 | WASAPI backend: shared-mode event-driven streams, process loopback, device and session enumeration | `src/backend/wasapi.rs` |
 | Demo backend for non-Windows hosts | `src/backend/dummy.rs` |
@@ -203,7 +211,12 @@ executable with `include_str!`, so the release is a single `.exe`.
 | POST | `/api/sounds/stop` | Stops all sounds. |
 | PUT | `/api/sounds/order` | `{"ids":["…","…"]}` (every sound id, in the new order) |
 | PATCH | `/api/soundboard` | `{"hear_sounds":true,"hear_sounds_db":-6}` |
-| PUT | `/api/hotkeys` | `[{"keys":"Ctrl+Shift+M","action":"push_to_talk","target":"…"}]`. Actions: `toggle_mute`, `push_to_talk`, `push_to_mute` (target: `master` or a source id), `play_sound` (target: a sound id), `stop_sounds`. |
+| POST | `/api/music/items` | `{"path":"C:\\Users\\you\\Music"}`: a folder or audio file. Adds the music player to the mix if it isn't there. |
+| DELETE | `/api/music/items/{id}` | |
+| POST | `/api/music/control` | `{"action":"toggle"}`, `pause`, `next`, `previous`, `{"action":"play","track":3}`, `{"action":"seek","position_ms":60000}` |
+| PATCH | `/api/music` | `{"shuffle":true,"repeat":"all","duck":true,"duck_db":-12,"hear":true,"hear_db":-6}` (`repeat`: `off`, `all`, `one`) |
+| POST | `/api/music/browse` | `{"folders":true}`: shows the Windows file picker; returns `{"paths":[…]}` |
+| PUT | `/api/hotkeys` | `[{"keys":"Ctrl+Shift+M","action":"push_to_talk","target":"…"}]`. Actions: `toggle_mute`, `push_to_talk`, `push_to_mute` (target: `master` or a source id), `play_sound` (target: a sound id), `stop_sounds`, `music_play_pause`, `music_next`, `music_previous`. |
 | PUT | `/api/settings` | `{"autostart":true,"autostart_admin":false}`. Changing `autostart_admin` shows a Windows permission prompt and waits for it. |
 | POST | `/api/quit` | Stops the app. |
 | GET | `/ws` | WebSocket: pushes `state` on change (including `monitor`, Listen's `{state, message}`) and `meters` about 30 times a second (with `playing`, the sounds playing now, and each mic's `mic_level` and `mic_gate_open`). Send `{"type":"listen","on":true}` to monitor the mix; it plays while any connection has it on, and a connection's request ends when it closes. |

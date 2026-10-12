@@ -75,6 +75,9 @@ impl ProcessingControl {
     fn threshold_db(&self) -> f32 {
         f32::from_bits(self.threshold_db.load(Ordering::Relaxed))
     }
+    pub fn gate_enabled(&self) -> bool {
+        self.gate.load(Ordering::Relaxed)
+    }
     pub fn level(&self) -> f32 {
         f32::from_bits(self.level.load(Ordering::Relaxed))
     }

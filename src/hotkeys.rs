@@ -3,7 +3,7 @@
 //! key release.
 
 use crate::config::{Hotkey, HotkeyAction};
-use crate::engine::Engine;
+use crate::engine::{Engine, MusicControl};
 use anyhow::bail;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -101,7 +101,7 @@ pub fn gate_states<'a>(hotkeys: impl Iterator<Item = (&'a Hotkey, bool)>) -> Has
                 entry.1 |= held;
             }
             HotkeyAction::PushToMute => entry.2 |= held,
-            HotkeyAction::ToggleMute | HotkeyAction::PlaySound | HotkeyAction::StopSounds => {}
+            _ => {}
         }
     }
     acc.into_iter()
@@ -127,9 +127,9 @@ fn presses<'a>(
             Some((keys, was)) if keys == hk.keys => was,
             _ => is_held,
         };
-        let on_press = matches!(
+        let on_press = !matches!(
             hk.action,
-            HotkeyAction::ToggleMute | HotkeyAction::PlaySound | HotkeyAction::StopSounds
+            HotkeyAction::PushToTalk | HotkeyAction::PushToMute
         );
         if on_press && is_held && !was {
             pressed.push(hk);
@@ -190,6 +190,15 @@ fn poll_loop(engine: Arc<Engine>) {
                     }
                 }
                 HotkeyAction::StopSounds => engine.stop_sounds(),
+                HotkeyAction::MusicPlayPause => {
+                    let _ = engine.music_control(MusicControl::Toggle);
+                }
+                HotkeyAction::MusicNext => {
+                    let _ = engine.music_control(MusicControl::Next);
+                }
+                HotkeyAction::MusicPrevious => {
+                    let _ = engine.music_control(MusicControl::Previous);
+                }
                 HotkeyAction::PushToTalk | HotkeyAction::PushToMute => {}
             }
         }
