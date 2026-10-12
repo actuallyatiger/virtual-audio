@@ -53,10 +53,18 @@
       <div class="panel-head">
         <h2 id="sb-h">Soundboard</h2>
         <div class="panel-actions">
+          <button id="hear-sounds" class="ghost listen" aria-pressed="false"
+            title="Also play the soundboard on your Windows default output (use headphones), so you hear your own sounds">🎧 Hear sounds</button>
           <button id="stop-sounds" class="ghost" disabled>■ Stop all</button>
           <button id="add-sound" class="primary">+ Add sounds</button>
           <input type="file" id="sound-files" accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a" multiple hidden>
         </div>
+      </div>
+      <div class="hear-row" id="hear-row" hidden>
+        <label for="hear-gain">Your volume</label>
+        <input type="range" id="hear-gain" class="gain" min="-60" max="12" step="0.5">
+        <span id="hear-gain-value" class="gain-label"></span>
+        <span id="hear-status" class="status"></span>
       </div>
       <p class="hint" id="sb-hint"></p>
       <div id="sounds" class="sounds"></div>

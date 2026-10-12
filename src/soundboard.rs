@@ -7,7 +7,7 @@
 //! correction all work as they do for a microphone.
 
 use crate::backend::CaptureStream;
-use crate::mixer::{CHANNELS, SAMPLE_RATE};
+use crate::mixer::{CHANNELS, MonitorTap, SAMPLE_RATE, push_frames};
 use anyhow::{Context, anyhow, bail};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -237,6 +237,8 @@ struct PlayerState {
 #[derive(Default)]
 pub struct Player {
     state: Mutex<PlayerState>,
+    /// Hear sounds: a copy of the soundboard's output for your headphones.
+    pub tap: MonitorTap,
 }
 
 impl Player {
@@ -381,6 +383,11 @@ impl CaptureStream for Stream {
         }
         self.next += period;
         self.player.mix(&mut self.buf);
+        if let Ok(mut tap) = self.player.tap.try_lock()
+            && let Some(tx) = tap.as_mut()
+        {
+            push_frames(tx, &self.buf);
+        }
         sink(&self.buf);
         Ok(())
     }
