@@ -251,6 +251,10 @@ pub struct ChannelMeter {
     /// Device sources: whether the noise gate is letting audio through.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mic_gate_open: Option<bool>,
+    /// Device sources: raw input peak, before any processing (for the
+    /// setup check's "is the mic picking anything up").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mic_input: Option<f32>,
 }
 
 impl Engine {
@@ -428,6 +432,7 @@ impl Engine {
                         open: rt.ctrl.gate_open(),
                         mic_level: mic.then(|| rt.processing.level()),
                         mic_gate_open: mic.then(|| rt.processing.gate_open()),
+                        mic_input: mic.then(|| rt.processing.input_level()),
                     },
                 )
             })
@@ -439,6 +444,7 @@ impl Engine {
                 open: self.master.gate_open(),
                 mic_level: None,
                 mic_gate_open: None,
+                mic_input: None,
             },
         );
         out

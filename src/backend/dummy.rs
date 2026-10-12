@@ -16,36 +16,35 @@ impl Dummy {
 const APPS: &[(&str, u32, f32)] = &[("chrome.exe", 1000, 440.0), ("soundboard.exe", 2000, 660.0)];
 
 impl Backend for Dummy {
+    /// The first input is the default, unless `<data dir>/dummy-default-input`
+    /// names another (lets you simulate changing the Windows default).
     fn input_devices(&self) -> anyhow::Result<Vec<DeviceInfo>> {
-        Ok(vec![
-            DeviceInfo {
-                id: "dummy-mic".into(),
-                name: "Microphone (Dummy USB Mic)".into(),
-                is_default: true,
-            },
-            DeviceInfo {
-                id: "dummy-line".into(),
-                name: "Line In (Dummy)".into(),
-                is_default: false,
-            },
-            DeviceInfo {
-                id: "dummy-cable-out".into(),
-                name: "CABLE Output (VB-Audio Virtual Cable)".into(),
-                is_default: false,
-            },
-        ])
-    }
-
-    /// The first input, or the one whose id is in `<data dir>/dummy-default-input`
-    /// (lets you simulate changing the Windows default).
-    fn default_input(&self) -> Option<DeviceInfo> {
+        let devices = [
+            ("dummy-mic", "Microphone (Dummy USB Mic)"),
+            ("dummy-line", "Line In (Dummy)"),
+            ("dummy-cable-out", "CABLE Output (VB-Audio Virtual Cable)"),
+        ];
         let wanted =
             std::fs::read_to_string(crate::config::data_dir().join("dummy-default-input")).ok();
-        let inputs = self.input_devices().ok()?;
-        let pick = wanted
-            .and_then(|id| inputs.iter().position(|d| d.id == id.trim()))
+        let default = wanted
+            .and_then(|w| devices.iter().position(|d| d.0 == w.trim()))
             .unwrap_or(0);
-        inputs.into_iter().nth(pick)
+        Ok(devices
+            .iter()
+            .enumerate()
+            .map(|(i, &(id, name))| DeviceInfo {
+                id: id.into(),
+                name: name.into(),
+                is_default: i == default,
+            })
+            .collect())
+    }
+
+    fn default_input(&self) -> Option<DeviceInfo> {
+        self.input_devices()
+            .ok()?
+            .into_iter()
+            .find(|d| d.is_default)
     }
 
     fn default_output(&self) -> Option<DeviceInfo> {

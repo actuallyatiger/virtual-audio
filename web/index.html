@@ -15,6 +15,8 @@
       <span id="conn" class="conn" title="Connection to mixer">connecting…</span>
     </div>
     <div class="topbar-actions">
+      <button id="setup-btn" class="ghost setup-btn" title="Check that everything is set up"><span class="dot" aria-hidden="true"></span>Setup check</button>
+      <button id="help-btn" class="ghost">Help</button>
       <label class="switch" id="autostart-wrap" title="Launch in the background when you sign in">
         <input type="checkbox" id="autostart">
         <span>Start with Windows</span>
@@ -23,6 +25,11 @@
     </div>
   </header>
 
+  <div id="setup-banner" class="banner bad" role="status" hidden>
+    <span id="setup-banner-text"></span>
+    <button type="button" class="link" id="setup-banner-open">Review setup</button>
+  </div>
+
   <div id="demo-banner" class="banner" hidden>
     Demo mode: not running on Windows, so devices and apps are simulated tone generators.
   </div>
@@ -30,28 +37,42 @@
   <main>
     <section class="panel output-panel" aria-labelledby="out-h">
       <div class="panel-head">
-        <h2 id="out-h">Output</h2>
+        <div class="panel-title"><h2 id="out-h">Output</h2><button type="button" class="info" aria-expanded="false" aria-controls="out-info" aria-label="About the output" title="About the output"></button></div>
         <span id="out-status" class="status"></span>
+      </div>
+      <div class="info-pop" id="out-info" hidden>
+        <p>The mix goes to the playback side of a virtual audio cable (for VB-CABLE, <b>CABLE Input</b>). Other apps then choose the cable's recording side (<b>CABLE Output</b>) as their microphone, and hear the whole mix.</p>
+        <p>Don't send the mix to your speakers or headphones. To hear it yourself, use <b>🎧 Listen</b> on Master.</p>
+        <button type="button" class="link" data-help="help-start">More in Help</button>
       </div>
       <div class="output-row">
         <label for="output">Send the mix to</label>
         <select id="output"></select>
         <button id="refresh-outputs" class="ghost icon" title="Refresh device list" aria-label="Refresh device list">⟳</button>
       </div>
-      <p class="hint" id="output-hint"></p>
     </section>
 
     <section class="panel" aria-labelledby="mix-h">
       <div class="panel-head">
-        <h2 id="mix-h">Mixer</h2>
+        <div class="panel-title"><h2 id="mix-h">Mixer</h2><button type="button" class="info" aria-expanded="false" aria-controls="mix-info" aria-label="About the mixer" title="About the mixer"></button></div>
         <button id="add-source" class="primary">+ Add source</button>
+      </div>
+      <div class="info-pop" id="mix-info" hidden>
+        <ul>
+          <li>Each card is a source, mixed into <b>Master</b>, which goes to the output.</li>
+          <li>Drag a volume slider, or click its dB value to type one. Double-click a slider to reset it to 0 dB.</li>
+          <li>Drag a card by its handle, or focus the handle and use the arrow keys, to reorder.</li>
+          <li>Microphone cards have a ⚙ for noise suppression and the noise gate.</li>
+          <li><b>🎧 Listen</b> on Master plays the final mix on your Windows default output, so you can check what others hear (with about 100 ms delay).</li>
+        </ul>
+        <button type="button" class="link" data-help="help-sources">More in Help</button>
       </div>
       <div id="strips" class="strips"></div>
     </section>
 
     <section class="panel" id="soundboard" aria-labelledby="sb-h">
       <div class="panel-head">
-        <h2 id="sb-h">Soundboard</h2>
+        <div class="panel-title"><h2 id="sb-h">Soundboard</h2><button type="button" class="info" aria-expanded="false" aria-controls="sb-info" aria-label="About the soundboard" title="About the soundboard"></button></div>
         <div class="panel-actions">
           <button id="hear-sounds" class="ghost listen" aria-pressed="false"
             title="Also play the soundboard on your Windows default output (use headphones), so you hear your own sounds">🎧 Hear sounds</button>
@@ -59,6 +80,15 @@
           <button id="add-sound" class="primary">+ Add sounds</button>
           <input type="file" id="sound-files" accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a" multiple hidden>
         </div>
+      </div>
+      <div class="info-pop" id="sb-info" hidden>
+        <ul>
+          <li>Click a sound to play it into the mix. Clicking it again restarts it.</li>
+          <li>Add MP3, WAV, OGG, FLAC or M4A files up to 60 seconds long with <b>+ Add sounds</b>, or drop them on the soundboard.</li>
+          <li>A sound's ⚙ renames it, sets its volume or deletes it.</li>
+          <li><b>🎧 Hear sounds</b> also plays them on your Windows default output at <b>Your volume</b>, so you hear them without hearing your own voice.</li>
+        </ul>
+        <button type="button" class="link" data-help="help-soundboard">More in Help</button>
       </div>
       <div class="hear-row" id="hear-row" hidden>
         <label for="hear-gain">Your volume</label>
@@ -72,10 +102,17 @@
 
     <section class="panel" aria-labelledby="hk-h">
       <div class="panel-head">
-        <h2 id="hk-h">Hotkeys</h2>
+        <div class="panel-title"><h2 id="hk-h">Hotkeys</h2><button type="button" class="info" aria-expanded="false" aria-controls="hk-info" aria-label="About hotkeys" title="About hotkeys"></button></div>
         <button id="add-hotkey" class="ghost">+ Add hotkey</button>
       </div>
-      <p class="hint">Hotkeys work globally, even while a game or Discord is focused, and don't block the key in other apps.</p>
+      <div class="info-pop" id="hk-info" hidden>
+        <ul>
+          <li>Hotkeys work anywhere, even while a game is focused, and the key still reaches that app.</li>
+          <li><b>Push to talk</b> keeps a channel silent unless the keys are held; <b>push to mute</b> silences it while they're held.</li>
+          <li>Keyboard combinations and the mouse side buttons (Mouse4, Mouse5) both work.</li>
+        </ul>
+        <button type="button" class="link" data-help="help-hotkeys">More in Help</button>
+      </div>
       <div id="hotkeys" class="hotkeys"></div>
     </section>
   </main>
@@ -181,6 +218,115 @@
         <button id="mic-done" class="primary">Done</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="setup-dialog" aria-labelledby="setup-h">
+    <div class="dialog-body">
+      <h2 id="setup-h">Setup check</h2>
+      <ul id="setup-list" class="checks"></ul>
+      <div class="dialog-actions">
+        <button type="button" class="ghost" data-help="help-start">Getting started</button>
+        <button type="button" class="primary" id="setup-close">Close</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="help-dialog" class="wide" aria-labelledby="help-h">
+    <div class="dialog-body">
+      <div class="help-head">
+        <h2 id="help-h">Help</h2>
+        <button type="button" class="ghost icon" id="help-close" aria-label="Close help">✕</button>
+      </div>
+      <nav class="help-nav" aria-label="Help topics">
+        <a href="#help-start">Getting started</a>
+        <a href="#help-apps">Using the mic in other apps</a>
+        <a href="#help-sources">Sources and the mixer</a>
+        <a href="#help-mic">Mic processing</a>
+        <a href="#help-soundboard">Soundboard</a>
+        <a href="#help-hotkeys">Hotkeys</a>
+        <a href="#help-trouble">Troubleshooting</a>
+      </nav>
+      <div class="help-body">
+        <section id="help-start">
+          <h3>Getting started</h3>
+          <ol>
+            <li>Install a virtual audio cable, such as the free <a href="https://vb-audio.com/Cable/" target="_blank" rel="noreferrer">VB-Audio Virtual Cable</a>, and restart your PC.</li>
+            <li>In <b>Output</b>, send the mix to the cable's playback side (<b>CABLE Input</b>). It's picked automatically the first time if the cable is installed.</li>
+            <li>Your default microphone is added for you. Use <b>+ Add source</b> for apps (e.g. a browser or music player) or other inputs, and <b>+ Add sounds</b> for the soundboard.</li>
+            <li>In the app you talk in, choose the cable's recording side (<b>CABLE Output</b>) as the microphone. See <a href="#help-apps">Using the mic in other apps</a>.</li>
+          </ol>
+          <p><b>Setup check</b> in the top bar checks all of this and offers fixes.</p>
+        </section>
+
+        <section id="help-apps">
+          <h3>Using the mic in other apps</h3>
+          <p>Any app that records audio can use the mix: choose <b>CABLE Output (VB-Audio Virtual Cable)</b> as its microphone or input device. Keep your Windows default output on your speakers or headphones, not the cable.</p>
+          <p>Voice chat apps often clean up your mic themselves, which can cut out or distort the soundboard and music. The mixer can do this for your mic alone instead (see <a href="#help-mic">Mic processing</a>), so turn the app's versions off.</p>
+          <h4>Discord</h4>
+          <p>In <b>Settings → Voice &amp; Video</b>:</p>
+          <ul>
+            <li><b>Input Device</b>: CABLE Output (VB-Audio Virtual Cable).</li>
+            <li><b>Input Sensitivity</b>: turn off <i>Automatically determine input sensitivity</i> and drag the slider all the way left. Its automatic gate listens for speech, so it cuts out sounds and music while you aren't talking.</li>
+            <li><b>Noise Suppression</b>: None.</li>
+            <li><b>Echo Cancellation</b> and <b>Automatic Gain Control</b>: off.</li>
+          </ul>
+          <h4>OBS</h4>
+          <p>Add an <b>Audio Input Capture</b> source and choose CABLE Output. If OBS also captures your mic directly, remove that source so your voice isn't recorded twice.</p>
+          <h4>Teams, Zoom and others</h4>
+          <p>Choose CABLE Output as the microphone in the app's audio settings, and turn off its noise suppression if it cuts out the soundboard.</p>
+        </section>
+
+        <section id="help-sources">
+          <h3>Sources and the mixer</h3>
+          <ul>
+            <li><b>Apps</b> capture everything an app plays, including its child processes (all of a browser's tabs). The app keeps playing to your speakers too. Apps are matched by name, so capture resumes when the app restarts. Windows can only capture whole apps, not single windows or tabs.</li>
+            <li><b>Microphones and inputs</b>: pick a device, or <i>Default microphone</i>, which follows your Windows default. Capturing the cable's own recording side would loop the mix into itself, so that's refused.</li>
+            <li><b>Master</b> sets the level of the whole mix. A limiter stops the sum from clipping harshly.</li>
+            <li><b>🎧 Listen</b> plays the final mix on your Windows default output (use headphones) to check what others hear. It's shared by every open mixer page and turns off when the last page that turned it on closes.</li>
+          </ul>
+        </section>
+
+        <section id="help-mic">
+          <h3>Mic processing</h3>
+          <p>Open it with the ⚙ on a microphone's card. It only affects that mic, never apps or the soundboard.</p>
+          <ul>
+            <li><b>Noise suppression</b> uses a small neural network (RNNoise) to remove steady background noise such as fans, hum and keyboard clatter.</li>
+            <li>The <b>noise gate</b> silences your mic while you aren't talking. <i>Automatic</i> opens when it hears speech that's louder than the room's background noise. <i>Above a level I set</i> opens when the meter passes your line: set it just above where the meter sits while you're quiet. Either way it stays open for 200 ms after you stop, so word endings aren't cut.</li>
+          </ul>
+          <p>Either one adds up to 10 ms of delay and makes the mic mono.</p>
+        </section>
+
+        <section id="help-soundboard">
+          <h3>Soundboard</h3>
+          <ul>
+            <li>Add MP3, WAV, OGG, FLAC or M4A files (up to 60 seconds and 20 MB each, 64 sounds) with <b>+ Add sounds</b> or by dropping them on the soundboard.</li>
+            <li>Click a sound to play it; clicking it again restarts it. <b>Stop all</b> stops everything. A sound's ⚙ renames it, sets its own volume or deletes it.</li>
+            <li>The soundboard is also a card in the mixer, with its own volume, mute and hotkeys. If you remove that card, the soundboard offers to add it back.</li>
+            <li><b>🎧 Hear sounds</b> plays the soundboard on your Windows default output at <b>Your volume</b>, so you hear your sounds without hearing your own voice. It pauses while Listen is on, as Listen already includes them.</li>
+          </ul>
+        </section>
+
+        <section id="help-hotkeys">
+          <h3>Hotkeys</h3>
+          <ul>
+            <li>Hotkeys work anywhere, even while a game is focused, and don't block the key from reaching that app.</li>
+            <li>Actions: <b>toggle mute</b>, <b>push to talk</b> (silent unless held), <b>push to mute</b> (silent while held), <b>play sound</b> and <b>stop all sounds</b>.</li>
+            <li>Click a hotkey's keys to record new ones. Keyboard combinations and the mouse side buttons (Mouse4, Mouse5) both work.</li>
+          </ul>
+        </section>
+
+        <section id="help-trouble">
+          <h3>Troubleshooting</h3>
+          <ul>
+            <li><b>Others hear nothing</b>: check <b>Setup check</b>, that the app you talk in uses CABLE Output, and that the mic card's meter moves when you speak.</li>
+            <li><b>Everything I play ends up in the mic, or I hear nothing</b>: your Windows default output is probably the cable. Set it back to your speakers or headphones in Settings → System → Sound.</li>
+            <li><b>Listen or Hear sounds is refused</b>: they play on the Windows default output, which mustn't be the device the mix goes to.</li>
+            <li><b>The gate cuts out quiet words</b>: switch it to <i>Above a level I set</i> and lower the line.</li>
+          </ul>
+          <p>The app keeps its files in <code>%APPDATA%\VirtualAudioMixer</code>: <code>config.json</code> (your settings), <code>sounds\</code>, and <code>log.txt</code> (this run) and <code>log.previous.txt</code> (the run before), which the tray menu's <b>Open log file</b> opens. A <code>config.json</code> that can't be read is moved aside as <code>config.&lt;time&gt;.json.bad</code>.</p>
+        </section>
+      </div>
+    </div>
   </dialog>
 
   <div id="toast" class="toast" role="status" hidden></div>

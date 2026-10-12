@@ -58,6 +58,8 @@ It runs as a small tray app and is controlled from a web page served on
   channel, play a sound, or stop all sounds.
   Keyboard combos and mouse side buttons (Mouse4/Mouse5) both work. Hotkeys
   don't swallow the key, so it still reaches the game you're in.
+- **Setup check** and **Help** in the top bar, and an ⓘ next to each
+  section explaining it.
 - Start with Windows (runs in the background, tray icon only).
 - Settings are saved to `%APPDATA%\VirtualAudioMixer\config.json`.
 
@@ -80,17 +82,13 @@ It runs as a small tray app and is controlled from a web page served on
    selected automatically on first run if the cable is installed.
 4. Your default microphone is added automatically. Click **+ Add source** to
    add apps (e.g. `chrome.exe`) or other input devices.
-5. In Discord, open **Settings → Voice & Video**:
-   - **Input Device**: **CABLE Output (VB-Audio Virtual Cable)**.
-   - **Input Sensitivity**: turn off *Automatically determine input
-     sensitivity* and drag the slider all the way left. Discord's automatic
-     gate listens for speech, so it cuts out sounds and music when you
-     aren't talking. Use the mixer's noise gate on your mic instead: it
-     only gates the mic, never the soundboard or apps.
-   - **Noise Suppression**: *None* (Krisp also treats sounds and music as
-     noise). Use the mixer's noise suppression on your mic instead.
-   - **Echo Cancellation** and **Automatic Gain Control**: off. They can
-     duck or pump the soundboard and music.
+5. In the app you talk in, choose **CABLE Output (VB-Audio Virtual Cable)**
+   as the microphone, and turn off its own automatic sensitivity and noise
+   suppression, which tend to cut out the soundboard and music. The mixer's
+   **Help** has the exact settings for Discord, OBS, Teams and Zoom.
+6. **Setup check** in the top bar confirms all of this (the cable, the
+   output, your Windows default devices, and that your mic picks up sound)
+   and offers one-click fixes.
 
 > Tip: if you capture an app, don't also route the cable back to your
 > speakers, or you'll hear that app twice.
