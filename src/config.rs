@@ -78,8 +78,19 @@ pub struct SourceConfig {
 pub struct Processing {
     pub noise_suppression: bool,
     pub noise_gate: bool,
-    /// The gate opens when the level reaches this (dBFS).
+    pub gate_mode: GateMode,
+    /// Manual mode: the gate opens when the level reaches this (dBFS).
     pub gate_db: f32,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GateMode {
+    /// Opens when it hears your voice, like Discord's automatic sensitivity.
+    #[default]
+    Auto,
+    /// Opens above `gate_db`.
+    Manual,
 }
 
 impl Default for Processing {
@@ -87,6 +98,7 @@ impl Default for Processing {
         Self {
             noise_suppression: false,
             noise_gate: false,
+            gate_mode: GateMode::Auto,
             gate_db: -45.0,
         }
     }

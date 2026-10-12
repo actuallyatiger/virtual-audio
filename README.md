@@ -22,13 +22,17 @@ It runs as a small tray app and is controlled from a web page served on
 - **Any input device** as a source, or "default microphone", which follows the
   Windows default live. Sources that would capture the recording end of the
   output cable (a feedback loop) are refused with an error.
-- **Mic processing** for input devices, under each mic's **Mic processing**:
+- **Mic processing** for input devices (the ⚙ on a mic's card):
   - *Noise suppression* (RNNoise) removes steady background noise such as
     fans, hum and keyboard clatter. With it on, you can turn off Discord's own
     noise suppression, which tends to cut out the soundboard and music.
-  - A *noise gate* silences the mic until it's louder than a threshold you set
-    against a live level meter. It stays open for 200 ms after you stop
-    talking, so word endings aren't clipped.
+  - A *noise gate* silences the mic while you aren't talking. *Automatic*
+    mode (the default) opens when RNNoise's voice detector hears speech
+    that's louder than the room's background noise, like Discord's automatic
+    input sensitivity. *Manual* mode opens above a level you set against a
+    live meter. Either way it stays open for 200 ms after you stop talking,
+    so word endings aren't clipped, and it only gates the mic: the
+    soundboard and apps always get through.
 
   Either one adds up to 10 ms of delay and makes the mic mono.
 - **Soundboard**: add MP3, WAV, OGG, FLAC or M4A files (up to 60 seconds and
@@ -144,7 +148,7 @@ cargo build --target x86_64-pc-windows-gnu
 | Piece | Where |
 | --- | --- |
 | Mixing core: per-source SPSC ring buffers, gain ramps, meters, soft limiter | `src/mixer.rs` |
-| Mic processing: RNNoise noise suppression and noise gate | `src/dsp.rs` |
+| Mic processing: RNNoise noise suppression, and a noise gate driven by RNNoise's voice detector or a level | `src/dsp.rs` |
 | Soundboard: file decoding (Symphonia), resampling to 48 kHz, playback | `src/soundboard.rs` |
 | Engine: config, capture/render/monitor threads, supervisor that restarts captures, output and Listen as apps/devices come and go | `src/engine.rs` |
 | WASAPI backend: shared-mode event-driven streams, process loopback, device and session enumeration | `src/backend/wasapi.rs` |
@@ -173,7 +177,7 @@ executable with `include_str!`, so the release is a single `.exe`.
 | GET | `/api/apps` | |
 | POST | `/api/sources` | `{"kind":"app","exe":"chrome.exe"}` or `{"kind":"device","device":null}`, plus an optional `"name"` |
 | PUT | `/api/sources/order` | `{"ids":["…","…"]}` (every source id, in the new order) |
-| PATCH | `/api/channels/{id or "master"}` | `{"gain_db":-6,"muted":true,"name":"…"}` (`name` applies to sources only). Input devices also take `noise_suppression`, `noise_gate` (booleans) and `gate_db` (−60 to 0). |
+| PATCH | `/api/channels/{id or "master"}` | `{"gain_db":-6,"muted":true,"name":"…"}` (`name` applies to sources only). Input devices also take `noise_suppression`, `noise_gate` (booleans), `gate_mode` (`"auto"` or `"manual"`) and `gate_db` (−60 to 0, for manual). |
 | DELETE | `/api/channels/{id}` | Removing the soundboard keeps its sounds; add it back with `POST /api/sources` `{"kind":"soundboard"}`. |
 | PUT | `/api/output` | `{"device":{"id":"…","name":"…"}}` or `{"device":null}` |
 | POST | `/api/sounds?filename=horn.mp3&name=…` | The raw file. Adds the soundboard to the mix if it isn't there. |

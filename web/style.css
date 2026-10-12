@@ -128,8 +128,7 @@ button.link { border: none; background: none; padding: 0; text-decoration: under
 .status.error::before { background: var(--bad); }
 .status:empty::before { display: none; }
 
-/* Top-aligned so one card opening its mic processing doesn't stretch the row. */
-.strips { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; align-items: start; }
+.strips { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
 
 .strip {
   background: var(--panel-2);
@@ -146,7 +145,7 @@ button.link { border: none; background: none; padding: 0; text-decoration: under
 .strip.is-muted .meter-fill { filter: grayscale(1) opacity(.5); }
 
 .strip-head { display: flex; align-items: center; gap: 8px; }
-.kind-icon { width: 22px; text-align: center; font-size: 16px; }
+.kind-icon { width: 22px; }
 .strip .name {
   flex: 1;
   width: 100%;
@@ -181,11 +180,16 @@ button.link { border: none; background: none; padding: 0; text-decoration: under
 .strip.dragging { opacity: .45; }
 .listen[aria-pressed=true] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 
-.processing { border-top: 1px solid var(--border); padding-top: 8px; font-size: 13px; }
-.processing summary { cursor: pointer; color: var(--muted); font-size: 12px; }
-.proc-summary { color: var(--muted); }
+.icon svg, .kind-icon svg, .sound .edit svg { width: 18px; height: 18px; display: block; }
+.kind-icon { color: var(--muted); display: flex; justify-content: center; }
+.strip-actions .settings { margin-left: auto; color: var(--muted); }
+.strip-actions .settings.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+.gate-panel { display: grid; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
+.gate-mode { border: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.gate-mode legend { padding: 0; font-size: 12px; color: var(--muted); }
+.gate-mode .check { margin-top: 4px; }
 .check { display: flex; align-items: center; gap: 6px; margin-top: 8px; cursor: pointer; }
-.gate-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 8px; align-items: center; margin-top: 6px; }
+.gate-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 8px; align-items: center; }
 .gate-controls .hint { grid-column: 1 / -1; margin: 0; }
 .threshold { width: 100%; margin: 0; accent-color: var(--accent); }
 .threshold-mark { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--text); }
