@@ -702,7 +702,8 @@ function soundTile(sound) {
     title: ready ? `Play ${sound.name}` : sound.state === "error" ? sound.message : "Loading…",
   }, el("span", { className: "play-icon", "aria-hidden": "true", textContent: "▶" }), el("span", { className: "sound-name", textContent: sound.name }));
   play.addEventListener("click", () => attempt(api("POST", `/api/sounds/${sound.id}/play`)));
-  const edit = el("button", { type: "button", className: "edit ghost icon", textContent: "⋯", title: "Edit or delete", "aria-label": `Edit ${sound.name}` });
+  // U+FE0E asks for the plain text cog, not a colour emoji.
+  const edit = el("button", { type: "button", className: "edit", textContent: "⚙\uFE0E", title: "Settings", "aria-label": `Settings for ${sound.name}` });
   edit.addEventListener("click", () => openSoundDialog(sound.id));
   const tile = el("div", { className: `sound ${sound.state}`, "data-id": sound.id }, play, edit);
   if (sound.state === "error") tile.append(el("span", { className: "sound-error", textContent: "Couldn't load this file", title: sound.message }));
