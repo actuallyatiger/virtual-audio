@@ -60,10 +60,14 @@ It runs as a small tray app and is controlled from a web page served on
   Keyboard combos and mouse side buttons (Mouse4/Mouse5) both work. Hotkeys
   don't swallow the key, so it still reaches the game you're in. While an
   app running as administrator is focused (some games do this), Windows
-  hides its keys from other apps, so run the mixer as administrator too.
+  hides its keys from other apps, so run the mixer as administrator too
+  (Start with Windows → as administrator).
 - **Setup check** and **Help** in the top bar, and an ⓘ next to each
   section explaining it.
-- Start with Windows (runs in the background, tray icon only).
+- Start with Windows (runs in the background, tray icon only), optionally
+  **as administrator** so hotkeys also work in games that run as
+  administrator. That uses a Task Scheduler task with highest privileges,
+  so Windows asks for permission once rather than at every sign-in.
 - Settings are saved to `%APPDATA%\VirtualAudioMixer\config.json`.
 
 ## Requirements
@@ -189,7 +193,7 @@ executable with `include_str!`, so the release is a single `.exe`.
 | PUT | `/api/sounds/order` | `{"ids":["…","…"]}` (every sound id, in the new order) |
 | PATCH | `/api/soundboard` | `{"hear_sounds":true,"hear_sounds_db":-6}` |
 | PUT | `/api/hotkeys` | `[{"keys":"Ctrl+Shift+M","action":"push_to_talk","target":"…"}]`. Actions: `toggle_mute`, `push_to_talk`, `push_to_mute` (target: `master` or a source id), `play_sound` (target: a sound id), `stop_sounds`. |
-| PUT | `/api/settings` | `{"autostart":true}` |
+| PUT | `/api/settings` | `{"autostart":true,"autostart_admin":false}`. Changing `autostart_admin` shows a Windows permission prompt and waits for it. |
 | POST | `/api/quit` | Stops the app. |
 | GET | `/ws` | WebSocket: pushes `state` on change (including `monitor`, Listen's `{state, message}`) and `meters` about 30 times a second (with `playing`, the sounds playing now, and each mic's `mic_level` and `mic_gate_open`). Send `{"type":"listen","on":true}` to monitor the mix; it plays while any connection has it on, and a connection's request ends when it closes. |
 

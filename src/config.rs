@@ -20,6 +20,9 @@ pub struct Config {
     /// too, so you hear your own sounds.
     pub hear_sounds: bool,
     pub hear_sounds_db: f32,
+    /// Start with Windows uses the elevated scheduled task instead of the
+    /// `Run` registry entry.
+    pub autostart_admin: bool,
 }
 
 impl Default for Config {
@@ -33,6 +36,7 @@ impl Default for Config {
             sounds: Vec::new(),
             hear_sounds: true,
             hear_sounds_db: 0.0,
+            autostart_admin: false,
         }
     }
 }

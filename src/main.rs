@@ -17,6 +17,19 @@ use config::{Channel, Config, DeviceRef, SourceConfig, SourceKind};
 use std::sync::Arc;
 
 fn main() -> anyhow::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    // Re-launched elevated to register or remove the sign-in task, then exit
+    // (see platform.rs). Before anything else: no port, no logging.
+    if let Some(i) = args.iter().position(|a| a == "--admin-autostart") {
+        let enabled = args.get(i + 1).is_some_and(|a| a == "on");
+        let user = args
+            .iter()
+            .position(|a| a == "--user")
+            .and_then(|j| args.get(j + 1))
+            .map_or("", String::as_str);
+        return platform::admin_task_helper(enabled, user);
+    }
+
     let background = std::env::args().any(|a| a == "--background");
     let verbose = std::env::args().any(|a| a == "--verbose");
 

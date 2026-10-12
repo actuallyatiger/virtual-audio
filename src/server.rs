@@ -143,7 +143,10 @@ async fn guard(State(app): State<App>, headers: HeaderMap, req: Request, next: N
 
 fn full_state(engine: &Engine) -> serde_json::Value {
     let mut v = serde_json::to_value(engine.state()).unwrap();
-    v["autostart"] = json!(platform::autostart_enabled());
+    let admin = engine.autostart_admin();
+    v["autostart"] = json!(admin || platform::autostart_enabled());
+    v["autostart_admin"] = json!(admin);
+    v["elevated"] = json!(platform::is_elevated());
     v["platform_supported"] = json!(PLATFORM_SUPPORTED);
     v
 }
@@ -295,12 +298,29 @@ async fn stop_sounds(State(app): State<App>) -> ApiResult {
 #[derive(Deserialize)]
 struct Settings {
     autostart: Option<bool>,
+    /// Start with Windows as administrator (the elevated sign-in task).
+    autostart_admin: Option<bool>,
 }
 
-async fn set_settings(Json(body): Json<Settings>) -> ApiResult {
-    if let Some(enabled) = body.autostart {
-        platform::set_autostart(enabled).map_err(bad)?;
-    }
+async fn set_settings(State(app): State<App>, Json(body): Json<Settings>) -> ApiResult {
+    // Changing the elevated task waits for the user to answer a UAC prompt.
+    blocking(&app, StatusCode::BAD_REQUEST, move |e| {
+        let admin = e.autostart_admin();
+        let run_key = platform::autostart_enabled();
+        let want = body.autostart.unwrap_or(admin || run_key);
+        let want_admin = want && body.autostart_admin.unwrap_or(admin);
+        if want_admin != admin {
+            platform::set_admin_autostart(want_admin)?;
+            e.set_autostart_admin(want_admin);
+        }
+        // The Run entry is only for the non-administrator mode.
+        let want_run_key = want && !want_admin;
+        if want_run_key != run_key {
+            platform::set_autostart(want_run_key)?;
+        }
+        Ok(())
+    })
+    .await?;
     ok()
 }
 

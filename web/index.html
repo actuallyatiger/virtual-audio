@@ -21,6 +21,11 @@
         <input type="checkbox" id="autostart">
         <span>Start with Windows</span>
       </label>
+      <label class="switch" id="autostart-admin-wrap" hidden
+        title="Start as administrator, so hotkeys also work while games running as administrator are focused. Windows asks for permission once.">
+        <input type="checkbox" id="autostart-admin">
+        <span id="autostart-admin-label">as administrator</span>
+      </label>
       <button id="quit" class="ghost danger" title="Stop the mixer and close the tray app">Quit</button>
     </div>
   </header>
@@ -107,7 +112,8 @@
       </div>
       <div class="info-pop" id="hk-info" hidden>
         <ul>
-          <li>Hotkeys work while other apps are focused, and the key still reaches that app. They can't see keys while an app running as administrator is focused (some games do this): run the mixer as administrator too.</li>
+          <li>Hotkeys work while other apps are focused, and the key still reaches that app.</li>
+          <li id="elevation-note"></li>
           <li><b>Push to talk</b> keeps a channel silent unless the keys are held; <b>push to mute</b> silences it while they're held.</li>
           <li>Keyboard combinations and the mouse side buttons (Mouse4, Mouse5) both work.</li>
         </ul>
@@ -311,7 +317,7 @@
           <h3>Hotkeys</h3>
           <ul>
             <li>Hotkeys work while other apps are focused, such as a game, and don't block the key from reaching that app.</li>
-            <li>Windows hides keys typed into an app running as administrator from apps that aren't, so hotkeys stop working while such an app is focused (some games and their launchers run this way, and voice chat apps' hotkeys have the same limit). Run the mixer as administrator too: right-click <code>virtual-audio.exe</code> → <b>Run as administrator</b>, or set that under <b>Properties → Compatibility</b>. Some anti-cheat software blocks other apps' hotkeys regardless.</li>
+            <li>Windows hides keys typed into an app running as administrator from apps that aren't, so hotkeys stop working while such an app is focused (some games and their launchers run this way, and voice chat apps' hotkeys have the same limit). To fix it, turn on <b>Start with Windows</b> → <b>as administrator</b> (Windows asks for permission once, then the mixer starts elevated at every sign-in without asking), or right-click <code>virtual-audio.exe</code> → <b>Run as administrator</b>. Some anti-cheat software blocks other apps' hotkeys regardless.</li>
             <li>Actions: <b>toggle mute</b>, <b>push to talk</b> (silent unless held), <b>push to mute</b> (silent while held), <b>play sound</b> and <b>stop all sounds</b>.</li>
             <li>Click a hotkey's keys to record new ones. Keyboard combinations and the mouse side buttons (Mouse4, Mouse5) both work.</li>
           </ul>

@@ -455,6 +455,16 @@ impl Engine {
         self.player.playing()
     }
 
+    pub fn autostart_admin(&self) -> bool {
+        self.inner.lock().unwrap().config.autostart_admin
+    }
+
+    pub fn set_autostart_admin(&self, on: bool) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.config.autostart_admin = on;
+        self.bump(&mut inner);
+    }
+
     pub fn hotkeys(&self) -> Vec<Hotkey> {
         self.inner.lock().unwrap().config.hotkeys.clone()
     }
