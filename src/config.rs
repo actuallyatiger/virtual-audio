@@ -121,11 +121,22 @@ impl Config {
         serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())
     }
 
-    /// Moves an unreadable config aside (to `config.json.bad`) so starting
-    /// over with defaults doesn't overwrite what the user may want back.
+    /// Moves an unreadable config aside (to `config.<timestamp>.json.bad`,
+    /// never replacing an earlier backup) so starting over with defaults
+    /// doesn't overwrite what the user may want back.
     pub fn back_up_unreadable() -> std::io::Result<PathBuf> {
         let path = config_path();
-        let backup = path.with_extension("json.bad");
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let backup = path.with_file_name(format!("config.{stamp}.json.bad"));
+        if backup.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!("{} already exists", backup.display()),
+            ));
+        }
         std::fs::rename(&path, &backup)?;
         Ok(backup)
     }

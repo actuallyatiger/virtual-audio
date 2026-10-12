@@ -65,7 +65,7 @@ into Explorer's address bar, or use the tray's **Open log file**):
 | File | What it is |
 | --- | --- |
 | `config.json` | Your sources, output, hotkeys and volumes. |
-| `config.json.bad` | A `config.json` that could not be read. It is moved aside and the app starts with defaults, so you can repair it. |
+| `config.<timestamp>.json.bad` | A `config.json` that could not be read. It is moved aside and the app starts with defaults, so you can repair it. If it can't be moved aside, the app doesn't start rather than overwrite it. |
 | `log.txt` | This run's log: every source and output it opens, errors, and crashes. |
 | `log.previous.txt` | The previous run's log. If the app vanished, look here. |
 
