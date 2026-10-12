@@ -6,7 +6,7 @@ let state = null;
 let outputs = [];
 const strips = new Map(); // channel id -> { el, parts }
 let hotkeyDrafts = []; // rows added in the UI that have no keys yet
-let recording = null; // { row, finish }
+let recording = null; // { key, cancel, stop }
 
 // ---------------------------------------------------------------- utilities
 
@@ -200,6 +200,7 @@ function createStrip(ch) {
   parts.gain.addEventListener("input", () => {
     const db = Number(parts.gain.value);
     parts.gainValue.textContent = formatDb(db);
+    parts.gain.setAttribute("aria-valuetext", formatDb(db));
     sendGain(db);
   });
   parts.gain.addEventListener("dblclick", () => {
@@ -233,6 +234,10 @@ function renderStrips() {
     }
     const p = strip.parts;
     p.icon.textContent = ch.icon;
+    strip.el.setAttribute("aria-label", ch.name);
+    p.gain.setAttribute("aria-label", `${ch.name} volume`);
+    p.mute.setAttribute("aria-label", `Mute ${ch.name}`);
+    if (p.remove.isConnected) p.remove.setAttribute("aria-label", `Remove ${ch.name}`);
     if (document.activeElement !== p.name) p.name.value = ch.name;
     p.detail.textContent = ch.detail;
     p.detail.title = ch.detail;
@@ -244,6 +249,7 @@ function renderStrips() {
     if (!p.dragging && document.activeElement !== p.gain) {
       p.gain.value = ch.gain_db;
       p.gainValue.textContent = formatDb(ch.gain_db);
+      p.gain.setAttribute("aria-valuetext", formatDb(ch.gain_db));
     }
     p.mute.setAttribute("aria-pressed", String(ch.muted));
     p.mute.textContent = ch.muted ? "Muted" : "Mute";
@@ -274,10 +280,13 @@ function updateMeters(meters) {
 
 // ---------------------------------------------------------------- add source
 
-const addState = { tab: "app", selection: null };
+// `fromList` says whether the selection came from a list (vs. typed).
+const addState = { tab: "app", selection: null, fromList: false };
+let listRequests = 0; // ignore responses to superseded list loads
 
 function openAddDialog() {
   addState.selection = null;
+  addState.fromList = false;
   $("#exe-input").value = "";
   $("#add-error").hidden = true;
   selectTab("app");
@@ -290,10 +299,25 @@ function openAddDialog() {
 function selectTab(tab) {
   addState.tab = tab;
   addState.selection = null;
+  addState.fromList = false;
+  $("#add-error").hidden = true;
   for (const b of document.querySelectorAll("#add-dialog [role=tab]")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
   for (const p of document.querySelectorAll("#add-dialog .tab-panel")) p.hidden = p.dataset.panel !== tab;
   for (const b of document.querySelectorAll("#add-dialog .pick-list button")) b.setAttribute("aria-pressed", "false");
+  // A name still typed in the app tab is the selection again.
+  if (tab === "app") selectTypedExe();
   updateAddButton();
+}
+
+function selectTypedExe() {
+  let exe = $("#exe-input").value.trim();
+  if (exe && !/\.exe$/i.test(exe)) exe += ".exe";
+  addState.selection = exe ? { kind: "app", exe } : null;
+  addState.fromList = false;
+}
+
+function sameSelection(a, b) {
+  return !!a && !!b && JSON.stringify(a) === JSON.stringify(b);
 }
 
 function updateAddButton() {
@@ -302,12 +326,14 @@ function updateAddButton() {
 
 function pickButton(label, sub, selection) {
   const btn = el("button", { type: "button" }, el("span", { textContent: label }), el("span", { className: "sub", textContent: sub }));
-  btn.setAttribute("aria-pressed", "false");
+  btn.setAttribute("aria-pressed", String(addState.fromList && sameSelection(selection, addState.selection)));
   btn.addEventListener("click", () => {
     for (const b of btn.closest(".pick-list").querySelectorAll("button")) b.setAttribute("aria-pressed", "false");
     btn.setAttribute("aria-pressed", "true");
     $("#exe-input").value = "";
+    $("#add-error").hidden = true;
     addState.selection = selection;
+    addState.fromList = true;
     updateAddButton();
   });
   btn.addEventListener("dblclick", () => $("#add-confirm").click());
@@ -316,21 +342,32 @@ function pickButton(label, sub, selection) {
 
 async function loadApps() {
   const list = $("#app-list");
+  const request = ++listRequests;
   list.replaceChildren(el("li", { className: "empty", textContent: "Loading…" }));
   try {
     const apps = await api("GET", "/api/apps");
-    const items = apps.map((a) => pickButton(a.exe, a.active ? "playing" : "idle", { kind: "app", exe: a.exe }));
+    if (request !== listRequests) return;
+    const selections = apps.map((a) => ({ kind: "app", exe: a.exe }));
+    if (addState.fromList && addState.selection?.kind === "app" && !selections.some((s) => sameSelection(s, addState.selection))) {
+      addState.selection = null;
+      addState.fromList = false;
+      updateAddButton();
+    }
+    const items = apps.map((a, i) => pickButton(a.exe, a.active ? "playing" : "idle", selections[i]));
     list.replaceChildren(...(items.length ? items : [el("li", { className: "empty", textContent: "No apps are playing audio right now. Start playback and refresh, or type the name below." })]));
   } catch (e) {
-    list.replaceChildren(el("li", { className: "error", textContent: e.message }));
+    if (request === listRequests) list.replaceChildren(el("li", { className: "error", textContent: e.message }));
   }
 }
 
+let inputRequests = 0;
 async function loadInputs() {
   const list = $("#device-list");
+  const request = ++inputRequests;
   list.replaceChildren(el("li", { className: "empty", textContent: "Loading…" }));
   try {
     const { inputs } = await api("GET", "/api/devices");
+    if (request !== inputRequests) return;
     list.replaceChildren(
       pickButton("Default microphone", "follows Windows", { kind: "device", device: null }),
       ...inputs.map((d) => pickButton(d.name, d.is_default ? "default" : "", { kind: "device", device: { id: d.id, name: d.name } })),
@@ -342,13 +379,13 @@ async function loadInputs() {
 
 for (const b of document.querySelectorAll("#add-dialog [role=tab]")) b.addEventListener("click", () => selectTab(b.dataset.tab));
 $("#refresh-apps").addEventListener("click", loadApps);
-$("#exe-input").addEventListener("input", (e) => {
-  let exe = e.target.value.trim();
+$("#exe-input").addEventListener("input", () => {
   for (const b of document.querySelectorAll("#app-list button")) b.setAttribute("aria-pressed", "false");
-  if (exe && !/\.exe$/i.test(exe)) exe += ".exe";
-  addState.selection = exe ? { kind: "app", exe } : null;
+  $("#add-error").hidden = true;
+  selectTypedExe();
   updateAddButton();
 });
+$("#add-cancel").addEventListener("click", () => $("#add-dialog").close());
 $("#add-confirm").addEventListener("click", async (e) => {
   e.preventDefault();
   if (!addState.selection) return;
@@ -393,31 +430,56 @@ function heldModifiers(e) {
   return [e.ctrlKey && "Ctrl", e.shiftKey && "Shift", e.altKey && "Alt", e.metaKey && "Win"].filter(Boolean);
 }
 
+let draftCounter = 0;
+let pendingFocus = null; // row key (or keys text) whose button gets focus after re-render
+
+/** Stable identity for a hotkey row: server id, or a local id for drafts. */
+function rowKey(h) {
+  return h.id || h._draft;
+}
+
 function hotkeyRows() {
   return [...state.hotkeys, ...hotkeyDrafts];
 }
 
-function saveHotkeys(rows) {
-  const complete = rows.filter((h) => h.keys);
-  hotkeyDrafts = rows.filter((h) => !h.keys);
-  attempt(api("PUT", "/api/hotkeys", complete));
+function updateRow(key, changes) {
+  saveHotkeys(hotkeyRows().map((h) => (rowKey(h) === key ? { ...h, ...changes } : h)));
 }
 
-function startRecording(row, button) {
-  stopRecording();
+function saveHotkeys(rows) {
+  const previousDrafts = hotkeyDrafts;
+  const complete = rows.filter((h) => h.keys).map(({ _draft, ...h }) => h);
+  hotkeyDrafts = rows.filter((h) => !h.keys);
+  api("PUT", "/api/hotkeys", complete).catch((e) => {
+    // Keep unsaved drafts and show the server's real list again.
+    hotkeyDrafts = previousDrafts;
+    renderHotkeys(true);
+    toast(e.message);
+  });
+}
+
+function startRecording(key, button) {
+  if (recording) cancelRecording();
+  const original = button.textContent;
   button.classList.add("recording");
   button.textContent = "Press keys… (Esc to cancel)";
   let mods = [];
   const finish = (keys) => {
     stopRecording();
+    pendingFocus = keys || key;
     if (keys) {
-      const rows = hotkeyRows().map((h) => (h === row ? { ...h, keys } : h));
-      saveHotkeys(rows);
+      updateRow(key, { keys });
     } else {
-      renderHotkeys(true);
+      button.classList.remove("recording");
+      button.textContent = original;
+      button.focus();
+      pendingFocus = null;
     }
   };
   const onKeyDown = (e) => {
+    if (e.repeat) return e.preventDefault();
+    // Plain Tab leaves the recorder instead of becoming a hotkey.
+    if (e.code === "Tab" && !heldModifiers(e).some((m) => m !== "Shift")) return finish(null);
     e.preventDefault();
     if (e.code === "Escape") return finish(null);
     const mod = MODIFIERS[e.key];
@@ -439,17 +501,24 @@ function startRecording(row, button) {
     if (name) {
       e.preventDefault();
       finish([...heldModifiers(e), name].join("+"));
+    } else if (e.target !== button) {
+      // Clicking anywhere else cancels; the click itself goes through.
+      finish(null);
     }
   };
+  const onBlur = () => finish(null);
   window.addEventListener("keydown", onKeyDown, true);
   window.addEventListener("keyup", onKeyUp, true);
   window.addEventListener("mousedown", onMouse, true);
+  window.addEventListener("blur", onBlur);
   recording = {
-    row,
+    key,
+    cancel: () => finish(null),
     stop: () => {
       window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("keyup", onKeyUp, true);
       window.removeEventListener("mousedown", onMouse, true);
+      window.removeEventListener("blur", onBlur);
     },
   };
 }
@@ -459,10 +528,17 @@ function stopRecording() {
   recording = null;
 }
 
+function cancelRecording() {
+  if (recording) recording.cancel();
+}
+
 let lastHotkeyRender = "";
 function renderHotkeys(force = false) {
   if (!state || (recording && !force)) return;
   const targets = [["master", "Master"], ...state.sources.map((s) => [s.id, s.name])];
+  const targetName = new Map(targets);
+  // Drafts pointing at a source that has since been removed fall back to Master.
+  for (const d of hotkeyDrafts) if (!targetName.has(d.target)) d.target = "master";
   const signature = JSON.stringify([hotkeyRows(), targets]);
   if (!force && signature === lastHotkeyRender) return;
   lastHotkeyRender = signature;
@@ -473,33 +549,50 @@ function renderHotkeys(force = false) {
     container.replaceChildren(el("p", { className: "empty", textContent: "No hotkeys yet. Add one to mute or push-to-talk any channel." }));
     return;
   }
-  container.replaceChildren(...rows.map((row) => {
-    const keys = el("button", { className: "keys", textContent: row.keys || "Click to record", title: "Click to record a new key combination" });
-    keys.addEventListener("click", () => startRecording(row, keys));
+  let focusTarget = null;
+  container.replaceChildren(...rows.map((row, i) => {
+    const key = rowKey(row);
+    const where = targetName.get(row.target) || "Master";
+    const keys = el("button", {
+      className: "keys",
+      textContent: row.keys || "Click to record",
+      title: "Click to record a new key combination",
+      "aria-label": `Hotkey ${i + 1} keys: ${row.keys || "none"}. Click to record`,
+    });
+    keys.addEventListener("click", () => startRecording(key, keys));
+    if (pendingFocus && (pendingFocus === key || pendingFocus === row.keys)) focusTarget = keys;
 
-    const action = el("select", { "aria-label": "Action" }, ...ACTIONS.map(([v, t]) => el("option", { value: v, textContent: t })));
+    const action = el("select", { "aria-label": `Hotkey ${i + 1} action (${where})` }, ...ACTIONS.map(([v, t]) => el("option", { value: v, textContent: t })));
     action.value = row.action;
-    action.addEventListener("change", () => saveHotkeys(hotkeyRows().map((h) => (h === row ? { ...h, action: action.value } : h))));
+    action.addEventListener("change", () => updateRow(key, { action: action.value }));
 
-    const target = el("select", { "aria-label": "Channel" }, ...targets.map(([v, t]) => el("option", { value: v, textContent: t })));
+    const target = el("select", { "aria-label": `Hotkey ${i + 1} channel` }, ...targets.map(([v, t]) => el("option", { value: v, textContent: t })));
     target.value = row.target;
-    target.addEventListener("change", () => saveHotkeys(hotkeyRows().map((h) => (h === row ? { ...h, target: target.value } : h))));
+    target.addEventListener("change", () => updateRow(key, { target: target.value }));
 
-    const del = el("button", { className: "ghost icon danger", textContent: "✕", title: "Delete hotkey" });
-    del.setAttribute("aria-label", "Delete hotkey");
-    del.addEventListener("click", () => saveHotkeys(hotkeyRows().filter((h) => h !== row)));
+    const del = el("button", {
+      className: "ghost icon danger",
+      textContent: "✕",
+      title: "Delete hotkey",
+      "aria-label": `Delete hotkey ${i + 1}${row.keys ? ` (${row.keys})` : ""}`,
+    });
+    del.addEventListener("click", () => saveHotkeys(hotkeyRows().filter((h) => rowKey(h) !== key)));
 
     return el("div", { className: "hotkey-row" }, keys, action, target, del);
   }));
+  if (focusTarget) {
+    focusTarget.focus();
+    pendingFocus = null;
+  }
 }
 
 $("#add-hotkey").addEventListener("click", () => {
   if (!state) return;
-  const row = { id: "", keys: "", action: "push_to_talk", target: state.sources[0] ? state.sources[0].id : "master" };
+  const row = { id: "", _draft: `draft${++draftCounter}`, keys: "", action: "push_to_talk", target: state.sources[0] ? state.sources[0].id : "master" };
   hotkeyDrafts.push(row);
   renderHotkeys(true);
   const buttons = document.querySelectorAll("#hotkeys .keys");
-  startRecording(row, buttons[buttons.length - 1]);
+  startRecording(row._draft, buttons[buttons.length - 1]);
 });
 
 // ---------------------------------------------------------------- settings

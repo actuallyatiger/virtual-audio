@@ -7,7 +7,10 @@
   --text: #e7e9ee;
   --muted: #9097a6;
   --accent: #5b8cff;
-  --accent-ink: #ffffff;
+  /* Text on filled accent buttons (dark ink keeps 4.5:1 on the bright blue). */
+  --accent-ink: #0b1020;
+  /* Filled "danger" background with white text (5.8:1). */
+  --bad-strong: #c4202f;
   --ok: #3ccf8e;
   --warn: #f5b740;
   --bad: #ff5d6c;
@@ -25,12 +28,18 @@
     --border: #dde1e8;
     --text: #1a1d24;
     --muted: #5f6675;
-    --accent: #3d6ef5;
+    --accent: #2f5fe0;
+    --accent-ink: #ffffff;
+    /* Darker status colours so text meets 4.5:1 on white. */
+    --ok: #0b7a4f;
+    --bad: #c4202f;
     --meter-bg: #e7eaf0;
   }
 }
 
 * { box-sizing: border-box; }
+/* Elements with display rules of their own must still honour `hidden`. */
+[hidden] { display: none !important; }
 
 body {
   margin: 0;
@@ -160,7 +169,7 @@ main { max-width: 1200px; margin: 0 auto; padding: 16px 24px 48px; display: grid
 .gain-value { width: 64px; text-align: right; font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); }
 
 .strip-actions { display: flex; align-items: center; gap: 8px; }
-.mute[aria-pressed=true] { background: var(--bad); border-color: var(--bad); color: #fff; }
+.mute[aria-pressed=true] { background: var(--bad-strong); border-color: var(--bad-strong); color: #fff; }
 .gate { display: none; font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 6px; background: var(--warn); color: #1a1d24; }
 .strip.gated .gate { display: inline-block; }
 
