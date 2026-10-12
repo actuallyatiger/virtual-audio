@@ -235,7 +235,7 @@ mod tests {
     }
 
     #[test]
-    fn toggle_fires_on_press_but_not_when_keys_change() {
+    fn press_actions_fire_on_press_but_not_when_keys_change() {
         let mut prev = PrevHeld::new();
         let mut hk = hk(HotkeyAction::ToggleMute, "mic");
         hk.id = "h1".into();

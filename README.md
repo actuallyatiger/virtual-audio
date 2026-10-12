@@ -143,12 +143,12 @@ cargo build --target x86_64-pc-windows-gnu
 | Tray icon, autostart, browser launch | `src/tray.rs`, `src/platform.rs` |
 
 All audio runs at 48 kHz stereo float. Windows converts each device's native
-format (`AUTOCONVERTPCM`); sounds are decoded and resampled to 48 kHz when
-they're added (and again at each start, in the background). Each source keeps about 30 ms of buffer, so total
-added latency is roughly 40–60 ms. Sources and the output run on separate
-clocks, so the mixer corrects drift continuously: when a source's buffer
-strays from its target it takes one frame more or less per 10 ms block and
-stretches the block to fit, a pitch change of about 0.2% for that block.
+format (`AUTOCONVERTPCM`), and sounds are resampled to 48 kHz when they're
+loaded. Each source keeps about 30 ms of buffer, so total added latency is
+roughly 40–60 ms. Sources and the output run on separate clocks, so the mixer
+corrects drift continuously: when a source's buffer strays from its target it
+takes one frame more or less per 10 ms block and stretches the block to fit, a
+pitch change of about 0.2% for that block.
 
 The web UI is plain HTML/CSS/JS with no build step. It is compiled into the
 executable with `include_str!`, so the release is a single `.exe`.
@@ -163,7 +163,7 @@ executable with `include_str!`, so the release is a single `.exe`.
 | POST | `/api/sources` | `{"kind":"app","exe":"chrome.exe"}` or `{"kind":"device","device":null}`, plus an optional `"name"` |
 | PUT | `/api/sources/order` | `{"ids":["…","…"]}` (every source id, in the new order) |
 | PATCH | `/api/channels/{id or "master"}` | `{"gain_db":-6,"muted":true,"name":"…"}` (`name` applies to sources only). Input devices also take `noise_suppression`, `noise_gate` (booleans) and `gate_db` (−60 to 0). |
-| DELETE | `/api/channels/{id}` | |
+| DELETE | `/api/channels/{id}` | Removing the soundboard keeps its sounds; add it back with `POST /api/sources` `{"kind":"soundboard"}`. |
 | PUT | `/api/output` | `{"device":{"id":"…","name":"…"}}` or `{"device":null}` |
 | POST | `/api/sounds?filename=horn.mp3&name=…` | The raw file. Adds the soundboard to the mix if it isn't there. |
 | PATCH | `/api/sounds/{id}` | `{"name":"…","gain_db":-6}` |
@@ -173,7 +173,7 @@ executable with `include_str!`, so the release is a single `.exe`.
 | PUT | `/api/hotkeys` | `[{"keys":"Ctrl+Shift+M","action":"push_to_talk","target":"…"}]`. Actions: `toggle_mute`, `push_to_talk`, `push_to_mute` (target: `master` or a source id), `play_sound` (target: a sound id), `stop_sounds`. |
 | PUT | `/api/settings` | `{"autostart":true}` |
 | POST | `/api/quit` | Stops the app. |
-| GET | `/ws` | WebSocket: pushes `state` on change (including `monitor`, Listen's `{state, message}`) and `meters` about 30 times a second (with `playing`, the sounds playing now). Send `{"type":"listen","on":true}` to monitor the mix; it plays while any connection has it on, and a connection's request ends when it closes. |
+| GET | `/ws` | WebSocket: pushes `state` on change (including `monitor`, Listen's `{state, message}`) and `meters` about 30 times a second (with `playing`, the sounds playing now, and each mic's `mic_level` and `mic_gate_open`). Send `{"type":"listen","on":true}` to monitor the mix; it plays while any connection has it on, and a connection's request ends when it closes. |
 
 Requests whose `Host` or `Origin` isn't `127.0.0.1`/`localhost` on our port are
 rejected, and the UI can't be embedded in another site's frame. This stops
