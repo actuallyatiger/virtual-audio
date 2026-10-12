@@ -86,6 +86,7 @@ pub fn router(engine: Arc<Engine>, port: u16, quit: Arc<dyn Fn() + Send + Sync>)
             post(add_sound).layer(DefaultBodyLimit::max(MAX_FILE_BYTES + 1024)),
         )
         .route("/api/sounds/stop", post(stop_sounds))
+        .route("/api/sounds/order", put(reorder_sounds))
         .route("/api/soundboard", patch(update_soundboard))
         .route("/api/sounds/{id}", patch(update_sound).delete(remove_sound))
         .route("/api/sounds/{id}/play", post(play_sound))
@@ -278,6 +279,11 @@ async fn update_soundboard(State(app): State<App>, Json(body): Json<SoundboardPa
         e.update_soundboard(body)
     })
     .await?;
+    ok()
+}
+
+async fn reorder_sounds(State(app): State<App>, Json(body): Json<Order>) -> ApiResult {
+    app.engine.reorder_sounds(&body.ids).map_err(bad)?;
     ok()
 }
 
