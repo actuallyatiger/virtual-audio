@@ -6,7 +6,7 @@ use crate::engine::{ChannelPatch, Engine};
 use crate::platform;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Request, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post, put};
@@ -26,7 +26,8 @@ struct App {
 type ApiResult = Result<Response, (StatusCode, String)>;
 
 fn bad(e: impl std::fmt::Display) -> (StatusCode, String) {
-    (StatusCode::BAD_REQUEST, e.to_string())
+    // `{:#}` includes anyhow's cause chain.
+    (StatusCode::BAD_REQUEST, format!("{e:#}"))
 }
 
 fn ok() -> ApiResult {
@@ -93,7 +94,8 @@ fn static_file(content_type: &'static str, body: &'static str) -> Response {
 }
 
 /// Only this machine's browser may talk to us: rejects DNS-rebinding (Host)
-/// and cross-site requests from other web pages (Origin).
+/// and cross-site requests from other web pages (Origin), and forbids other
+/// sites from framing the UI (clickjacking it into adding sources, etc.).
 async fn guard(State(app): State<App>, headers: HeaderMap, req: Request, next: Next) -> Response {
     let allowed = [
         format!("127.0.0.1:{}", app.port),
@@ -107,10 +109,22 @@ async fn guard(State(app): State<App>, headers: HeaderMap, req: Request, next: N
         None => true,
         Some(origin) => allowed.iter().any(|a| origin == format!("http://{a}")),
     };
-    if !host_ok || !origin_ok {
-        return (StatusCode::FORBIDDEN, "forbidden").into_response();
-    }
-    next.run(req).await
+    let mut response = if host_ok && origin_ok {
+        next.run(req).await
+    } else {
+        (StatusCode::FORBIDDEN, "forbidden").into_response()
+    };
+    let headers = response.headers_mut();
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("frame-ancestors 'none'"),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    response
 }
 
 fn full_state(engine: &Engine) -> serde_json::Value {
