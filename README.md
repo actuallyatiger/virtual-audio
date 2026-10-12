@@ -41,6 +41,10 @@ It runs as a small tray app and is controlled from a web page served on
   restarts it. Drag sounds to reorder them. Each sound has its own volume,
   and the soundboard is a mixer channel with its own volume, mute and
   hotkeys.
+- **Trim sounds** in a sound's ⚙: drag the edges of its waveform (or type
+  times), add fades, or **Trim silence** off both ends in one click.
+  Trimming doesn't change the file, so **Reset** brings the whole sound
+  back. **Preview** plays it only to you, through Hear sounds.
 - **Hear sounds** (on by default): the soundboard also plays on your Windows
   default output, at its own volume, so you hear your own sounds without
   hearing your own voice. It pauses while Listen is on, since Listen
@@ -191,7 +195,9 @@ executable with `include_str!`, so the release is a single `.exe`.
 | DELETE | `/api/channels/{id}` | Removing the soundboard keeps its sounds; add it back with `POST /api/sources` `{"kind":"soundboard"}`. |
 | PUT | `/api/output` | `{"device":{"id":"…","name":"…"}}` or `{"device":null}` |
 | POST | `/api/sounds?filename=horn.mp3&name=…` | The raw file. Adds the soundboard to the mix if it isn't there. |
-| PATCH | `/api/sounds/{id}` | `{"name":"…","gain_db":-6}` |
+| PATCH | `/api/sounds/{id}` | `{"name":"…","gain_db":-6,"start_ms":120,"end_ms":1500,"fade_in_ms":0,"fade_out_ms":50}` (`"end_ms":null` plays to the end) |
+| GET | `/api/sounds/{id}/waveform` | Peaks for drawing, and where the silence at either end starts and stops. |
+| POST | `/api/sounds/{id}/preview` | Plays a sound only to you (through Hear sounds), not into the mix. |
 | DELETE | `/api/sounds/{id}` | |
 | POST | `/api/sounds/{id}/play` | Plays (or restarts) a sound. |
 | POST | `/api/sounds/stop` | Stops all sounds. |
