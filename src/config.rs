@@ -64,7 +64,8 @@ pub struct SourceConfig {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SourceKind {
     /// A capture endpoint (microphone, line-in, ...). `None` follows the
-    /// Windows default communications/console microphone.
+    /// Windows default microphone (the console role, as set in Settings →
+    /// Sound → Input), and switches when that default changes.
     Device { device: Option<DeviceRef> },
     /// Audio rendered by a process (and its child processes), matched by
     /// executable name so it survives app restarts.
