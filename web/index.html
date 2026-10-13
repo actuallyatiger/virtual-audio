@@ -24,7 +24,7 @@
       <label class="switch" id="autostart-admin-wrap" hidden
         title="Start as administrator, so hotkeys also work while games running as administrator are focused. Windows asks for permission once.">
         <input type="checkbox" id="autostart-admin">
-        <span id="autostart-admin-label">as administrator</span>
+        <span id="autostart-admin-label">as Administrator</span>
       </label>
       <button id="quit" class="ghost danger" title="Stop the mixer and close the tray app">Quit</button>
     </div>
@@ -133,7 +133,7 @@
       </div>
       <div class="detail"></div>
       <div class="status"></div>
-      <div class="meter" aria-hidden="true"><div class="meter-fill"></div><div class="meter-mask"></div></div>
+      <div class="meter" aria-hidden="true"><div class="meter-fill"></div></div>
       <div class="gain-row">
         <input type="range" class="gain" min="-60" max="12" step="0.5" aria-label="Volume">
         <button class="gain-value" title="Click to type a value"></button>
@@ -213,7 +213,7 @@
           <label class="check"><input type="radio" name="gate-mode" value="manual"> Above a level I set</label>
         </fieldset>
         <div class="gate-controls">
-          <div class="meter mic-meter" aria-hidden="true"><div class="meter-fill"></div><div class="meter-mask"></div><div class="threshold-mark" id="mic-threshold-mark"></div></div>
+          <div class="meter mic-meter" aria-hidden="true"><div class="meter-fill"></div><div class="threshold-mark" id="mic-threshold-mark"></div></div>
           <span class="gate-state" id="mic-gate-state"></span>
           <input type="range" class="threshold" id="mic-threshold" min="-60" max="0" step="1" aria-label="Gate level">
           <span class="threshold-value" id="mic-threshold-value"></span>
@@ -317,7 +317,7 @@
           <h3>Hotkeys</h3>
           <ul>
             <li>Hotkeys work while other apps are focused, such as a game, and don't block the key from reaching that app.</li>
-            <li>Windows hides keys typed into an app running as administrator from apps that aren't, so hotkeys stop working while such an app is focused (some games and their launchers run this way, and voice chat apps' hotkeys have the same limit). To fix it, turn on <b>Start with Windows</b> → <b>as administrator</b> (Windows asks for permission once, then the mixer starts elevated at every sign-in without asking; it runs a copy in Program Files, so after updating the mixer turn the option off and on again), or right-click <code>virtual-audio.exe</code> → <b>Run as administrator</b>. Some anti-cheat software blocks other apps' hotkeys regardless.</li>
+            <li>Windows hides keys typed into an app running as administrator from apps that aren't, so hotkeys stop working while such an app is focused (some games and their launchers run this way, and voice chat apps' hotkeys have the same limit). To fix it, turn on <b>Start with Windows</b> → <b>as Administrator</b> (Windows asks for permission once, then the mixer starts elevated at every sign-in without asking; it runs a copy in Program Files, so after updating the mixer turn the option off and on again), or right-click <code>virtual-audio.exe</code> → <b>Run as administrator</b>. Some anti-cheat software blocks other apps' hotkeys regardless.</li>
             <li>Actions: <b>toggle mute</b>, <b>push to talk</b> (silent unless held), <b>push to mute</b> (silent while held), <b>play sound</b> and <b>stop all sounds</b>.</li>
             <li>Click a hotkey's keys to record new ones. Keyboard combinations and the mouse side buttons (Mouse4, Mouse5) both work.</li>
           </ul>
