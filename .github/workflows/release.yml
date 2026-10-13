@@ -44,8 +44,8 @@ jobs:
       - run: cargo build --release
       - uses: actions/upload-artifact@v4
         with:
-          name: virtual-audio
-          path: target/release/virtual-audio.exe
+          name: virtual-audio-mixer
+          path: target/release/virtual-audio-mixer.exe
           if-no-files-found: error
 
   publish:
@@ -57,11 +57,11 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: virtual-audio
-      # Always named virtual-audio.exe, so
-      # releases/latest/download/virtual-audio.exe keeps working.
+          name: virtual-audio-mixer
+      # Always named virtual-audio-mixer.exe, so
+      # releases/latest/download/virtual-audio-mixer.exe keeps working.
       - run: |
-          gh release upload "$TAG" virtual-audio.exe --clobber
+          gh release upload "$TAG" virtual-audio-mixer.exe --clobber
           gh release edit "$TAG" --draft=false --latest
         env:
           GH_TOKEN: ${{ github.token }}

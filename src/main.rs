@@ -127,6 +127,14 @@ fn main() -> anyhow::Result<()> {
         VERSION,
         std::env::args().skip(1).collect::<Vec<_>>()
     );
+    // Start with Windows starts the copy opened last, so a new download
+    // (which may have another name or folder) takes over from the old one.
+    if !background
+        && platform::autostart_enabled()
+        && let Err(e) = platform::set_autostart(true)
+    {
+        tracing::warn!("couldn't point Start with Windows at this copy: {e:#}");
+    }
     let (mut config, first_run) = match loaded {
         Ok(Some(config)) => (config, false),
         Ok(None) => (Config::default(), true),

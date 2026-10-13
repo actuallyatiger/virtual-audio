@@ -498,22 +498,32 @@ mod imp {
         anyhow::anyhow!("{}", String::from_utf8_lossy(&out.stderr).trim())
     }
 
+    /// The installed copy's name, and where a running one is moved aside.
+    const EXE: &str = "virtual-audio-mixer.exe";
+    const OLD_EXE: &str = "virtual-audio-mixer.old.exe";
+    /// The names from before the app was renamed (and before versions were
+    /// recorded), replaced on the next update.
+    const LEGACY: [&str; 2] = ["virtual-audio.exe", "virtual-audio.old.exe"];
+
     /// Copies this exe into `dir` (unless it is that copy) and returns the
     /// copy's path. A running copy can't be overwritten, but it can be
     /// renamed out of the way.
     fn install(dir: &Path) -> anyhow::Result<PathBuf> {
         let exe = std::env::current_exe()?;
-        let dest = dir.join("virtual-audio.exe");
+        let dest = dir.join(EXE);
         if dest.exists() {
             if std::fs::canonicalize(&exe)? == std::fs::canonicalize(&dest)? {
                 return Ok(dest);
             }
-            let old = dir.join("virtual-audio.old.exe");
+            let old = dir.join(OLD_EXE);
             let _ = std::fs::remove_file(&old);
             std::fs::rename(&dest, &old)
                 .context("replacing the installed copy (quit other copies of the mixer, or restart, and try again)")?;
         }
         std::fs::copy(&exe, &dest).context("copying the mixer to Program Files")?;
+        for file in LEGACY {
+            remove(&dir.join(file));
+        }
         Ok(dest)
     }
 
@@ -526,8 +536,8 @@ mod imp {
     /// recorded).
     pub fn admin_copy_version() -> Option<String> {
         let dir = install_dir().ok()?;
-        if !dir.join("virtual-audio.exe").exists() {
-            return None;
+        if !dir.join(EXE).exists() {
+            return dir.join(LEGACY[0]).exists().then(|| "unknown".into());
         }
         Some(
             std::fs::read_to_string(dir.join(VERSION_FILE))
@@ -564,7 +574,7 @@ mod imp {
             {
                 return Err(failure(&out));
             }
-            for file in ["virtual-audio.exe", "virtual-audio.old.exe", VERSION_FILE] {
+            for file in [EXE, OLD_EXE, VERSION_FILE].into_iter().chain(LEGACY) {
                 remove(&dir.join(file));
             }
             return Ok(());
@@ -648,7 +658,7 @@ mod tests {
 
     #[test]
     fn admin_task_runs_elevated_at_sign_in_without_limits() {
-        let xml = admin_task_xml(r"C:\Apps\Mixer & Co\virtual-audio.exe", r"PC\Tiger");
+        let xml = admin_task_xml(r"C:\Apps\Mixer & Co\virtual-audio-mixer.exe", r"PC\Tiger");
         assert!(xml.contains("<RunLevel>HighestAvailable</RunLevel>"));
         assert!(xml.contains("<LogonTrigger>"));
         assert!(xml.contains(r"<UserId>PC\Tiger</UserId>"));
@@ -661,7 +671,7 @@ mod tests {
             "laptops on battery"
         );
         assert!(xml.contains("<Priority>4</Priority>"), "not below normal");
-        assert!(xml.contains(r"<Command>C:\Apps\Mixer &amp; Co\virtual-audio.exe</Command>"));
+        assert!(xml.contains(r"<Command>C:\Apps\Mixer &amp; Co\virtual-audio-mixer.exe</Command>"));
         assert!(xml.contains("<Arguments>--background</Arguments>"));
     }
 }

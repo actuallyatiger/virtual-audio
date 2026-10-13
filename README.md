@@ -109,7 +109,7 @@ It runs as a small tray app and is controlled from a web page served on
 ## Setup
 
 1. Install VB-Audio Virtual Cable and reboot.
-2. Download `virtual-audio.exe` from the
+2. Download `virtual-audio-mixer.exe` from the
    [latest release](https://github.com/actuallyatiger/virtual-audio/releases/latest)
    and run it. The mixer opens in your browser, and a tray icon appears.
    Left-click it to reopen the page; right-click it for **Open mixer**,
@@ -159,7 +159,7 @@ mode print them to the terminal instead.
 ## Building
 
 ```sh
-cargo build --release            # on Windows → target/release/virtual-audio.exe
+cargo build --release            # on Windows → target/release/virtual-audio-mixer.exe
 ```
 
 CI builds the Windows release `.exe` for pull requests and pushes to `main`.
@@ -178,7 +178,7 @@ Versions follow [SemVer](https://semver.org) and come from the
    `CHANGELOG.md`. Before 1.0, a `feat` raises the minor version (0.1 →
    0.2) and a `fix` the patch.
 2. Merging that PR tags the version (`v0.2.0`), publishes a GitHub Release
-   with the changelog, and attaches the Windows `virtual-audio.exe`.
+   with the changelog, and attaches the Windows `virtual-audio-mixer.exe`.
 
 The app shows its version in the tray menu and at the bottom of Help, and
 `GET /api/state` reports it as `version`. For release-please to open its PR,
