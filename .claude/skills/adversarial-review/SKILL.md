@@ -57,8 +57,8 @@ prompt must be self-contained and include:
    drag and drop), state sync with the server, accessibility (labels, roles,
    keyboard reachability), and layout breaking at narrow widths.
 6. **Style, docs and consistency**: deviations from the surrounding code's
-   idioms and naming, dead code, misleading comments, README and API docs
-   that no longer match the code, Conventional Commit messages, and missing
+   idioms and naming, dead code, misleading comments, docs (README,
+   `AGENTS.md`, `docs/`, skills) that no longer match the code, Conventional Commit messages, and missing
    tests for changed behaviour.
 
 ### Required finding formats

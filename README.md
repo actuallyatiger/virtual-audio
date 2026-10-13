@@ -156,115 +156,18 @@ Output; Listen picks up the change by itself.
 Logs go to these files only in Windows release builds. Debug builds and demo
 mode print them to the terminal instead.
 
-## Building
+## Building and contributing
 
 ```sh
 cargo build --release            # on Windows → target/release/virtual-audio-mixer.exe
+cargo run                        # elsewhere: a demo backend at http://127.0.0.1:47800
 ```
 
-CI builds the Windows release `.exe` for pull requests and pushes to `main`.
-Download it from the workflow run's artifacts. Building needs Rust 1.88 or
-newer.
-
-### Releases
-
-Versions follow [SemVer](https://semver.org) and come from the
-[Conventional Commits](https://www.conventionalcommits.org) on `main`, via
-[release-please](https://github.com/googleapis/release-please)
-(`.github/workflows/release.yml`):
-
-1. Every push to `main` updates a release PR that bumps the version in
-   `Cargo.toml` and adds the new `feat`, `fix` and other changes to
-   `CHANGELOG.md`. Before 1.0, a `feat` raises the minor version (0.1 →
-   0.2) and a `fix` the patch.
-2. Merging that PR tags the version (`v0.2.0`), publishes a GitHub Release
-   with the changelog, and attaches the Windows `virtual-audio-mixer.exe`.
-
-The app shows its version in the tray menu and at the bottom of Help, and
-`GET /api/state` reports it as `version`. For release-please to open its PR,
-the repository's **Settings → Actions → General → Workflow permissions** must
-allow GitHub Actions to create pull requests.
-
-On Linux and macOS the same binary builds with a **demo backend**: fake
-devices and apps that generate tones. You can develop and test the engine and
-web UI anywhere with `cargo run`, then open `http://127.0.0.1:47800`.
-
-Cross-compiling for Windows from Linux also works:
-
-```sh
-rustup target add x86_64-pc-windows-gnu   # plus the mingw-w64 linker
-cargo build --target x86_64-pc-windows-gnu
-```
-
-## How it works
-
-| Piece | Where |
-| --- | --- |
-| Mixing core: per-source SPSC ring buffers, gain ramps, meters, soft limiter | `src/mixer.rs` |
-| Mic processing: RNNoise noise suppression, and a noise gate driven by RNNoise's voice detector or a level | `src/dsp.rs` |
-| Audio file decoding (Symphonia) and streaming resampling to 48 kHz | `src/decode.rs` |
-| Soundboard: sounds in memory, trims, playback | `src/soundboard.rs` |
-| Music: playlist, a decode thread streaming tracks from disk, ducking | `src/music.rs` |
-| Engine: config, capture/render/monitor threads, supervisor that restarts captures, output and Listen as apps/devices come and go | `src/engine.rs` |
-| WASAPI backend: shared-mode event-driven streams, process loopback, device and session enumeration | `src/backend/wasapi.rs` |
-| Demo backend for non-Windows hosts | `src/backend/dummy.rs` |
-| Global hotkeys (polled, non-blocking) | `src/hotkeys.rs` |
-| HTTP/WebSocket API (axum) and embedded UI | `src/server.rs`, `web/` |
-| Tray icon, autostart, browser launch | `src/tray.rs`, `src/platform.rs` |
-
-All audio runs at 48 kHz stereo float. Windows converts each device's native
-format (`AUTOCONVERTPCM`), and sounds are resampled to 48 kHz when they're
-loaded. Each source keeps about 30 ms of buffer, so total added latency is
-roughly 40–60 ms. Sources and the output run on separate clocks, so the mixer
-corrects drift continuously: when a source's buffer strays from its target it
-takes one frame more or less per 10 ms block and stretches the block to fit, a
-pitch change of about 0.2% for that block. A source's target can be raised
-to delay it, keeping it in time with a mic whose processing runs late (see
-`Engine::apply_delays`).
-
-The web UI is plain HTML/CSS/JS with no build step. It is compiled into the
-executable with `include_str!`, so the release is a single `.exe`.
-
-### API
-
-| Method | Path | Body |
-| --- | --- | --- |
-| GET | `/api/state` | Everything the UI shows, including `version`, `admin_copy_version` (the Program Files copy's version if there is one, `"unknown"` if it predates versions) and `admin_copy_outdated` |
-| GET | `/api/devices` | |
-| GET | `/api/apps` | |
-| POST | `/api/sources` | `{"kind":"app","exe":"chrome.exe"}` or `{"kind":"device","device":null}`, plus an optional `"name"`; or `{"kind":"soundboard"}` / `{"kind":"music"}` (one of each) |
-| PUT | `/api/sources/order` | `{"ids":["…","…"]}` (every source id, in the new order) |
-| PATCH | `/api/channels/{id or "master"}` | `{"gain_db":-6,"muted":true,"name":"…"}` (`name` applies to sources only). Input devices also take `noise_suppression`, `noise_gate` (booleans), `gate_mode` (`"auto"` or `"manual"`), `gate_db` (−60 to 0, for manual), and `extra_strength` and `keep_in_time` (booleans, for automatic). |
-| DELETE | `/api/channels/{id}` | Removing the soundboard keeps its sounds, and removing the music keeps its playlist (and pauses it); add them back with `POST /api/sources` `{"kind":"soundboard"}` or `{"kind":"music"}`. |
-| PUT | `/api/output` | `{"device":{"id":"…","name":"…"}}` or `{"device":null}` |
-| POST | `/api/sounds?filename=horn.mp3&name=…` | The raw file. Adds the soundboard to the mix if it isn't there. |
-| PATCH | `/api/sounds/{id}` | `{"name":"…","gain_db":-6,"start_ms":120,"end_ms":1500,"fade_in_ms":0,"fade_out_ms":50}` (`"end_ms":null` plays to the end) |
-| GET | `/api/sounds/{id}/waveform` | Peaks for drawing, and where the silence at either end starts and stops. |
-| POST | `/api/sounds/{id}/preview` | Plays a sound only to you (through Hear sounds), not into the mix. |
-| DELETE | `/api/sounds/{id}` | |
-| POST | `/api/sounds/{id}/play` | Plays (or restarts) a sound. |
-| POST | `/api/sounds/stop` | Stops all sounds. |
-| PUT | `/api/sounds/order` | `{"ids":["…","…"]}` (every sound id, in the new order) |
-| PATCH | `/api/soundboard` | `{"hear_sounds":true,"hear_sounds_db":-6}` |
-| POST | `/api/music/items` | `{"path":"C:\\Users\\you\\Music"}`: a folder or audio file. Adds the music player to the mix if it isn't there. |
-| DELETE | `/api/music/items/{id}` | |
-| DELETE | `/api/music/items` | Clears the playlist (the files stay) |
-| POST | `/api/music/control` | `{"action":"toggle"}`, `pause`, `next`, `previous`, `{"action":"play","track":3}`, `{"action":"seek","position_ms":60000}` |
-| PATCH | `/api/music` | `{"shuffle":true,"repeat":"all","duck":true,"duck_db":-12,"hear":true,"hear_db":-6}` (`repeat`: `off`, `all`, `one`) |
-| POST | `/api/music/tracks/remove` | `{"track":3,"name":"Song"}` (its index and name in the list): takes it out of the playlist, never off the disk |
-| POST | `/api/music/tracks/restore` | Puts every removed track back |
-| POST | `/api/music/browse` | `{"folders":true}`: shows the Windows file picker; returns `{"paths":[…]}` |
-| PUT | `/api/hotkeys` | `[{"keys":"Ctrl+Shift+M","action":"push_to_talk","target":"…"}]`. Actions: `toggle_mute`, `push_to_talk`, `push_to_mute` (target: `master` or a source id), `play_sound` (target: a sound id), `stop_sounds`, `music_play_pause`, `music_next`, `music_previous`. |
-| PUT | `/api/settings` | `{"autostart":true,"autostart_admin":false,"theme":"system"}` (`theme`: `"system"`, `"light"` or `"dark"`). Changing `autostart_admin` shows a Windows permission prompt and waits for it. |
-| POST | `/api/quit` | Stops the app. |
-| GET | `/ws` | WebSocket: pushes `state` on change (including `monitor`, Listen's `{state, message}`) and `meters` about 30 times a second (with `playing`, the sounds playing now, each mic's `mic_level` and `mic_gate_open`, and `music_position_ms`). Send `{"type":"listen","on":true}` to monitor the mix; it plays while any connection has it on, and a connection's request ends when it closes. |
-
-Requests whose `Host` or `Origin` isn't `127.0.0.1`/`localhost` on our port are
-rejected, and the UI can't be embedded in another site's frame. This stops
-other websites from controlling the mixer. Invalid input gets a 400 with a
-message; names are limited to 100 characters, sources and hotkeys to 64
-each, and the playlist to 200 files and folders (10,000 tracks; a folder
-scan also stops after 200,000 entries).
+- [docs/development.md](docs/development.md): building, checks, testing and
+  releases.
+- [docs/architecture.md](docs/architecture.md): how it works.
+- [docs/api.md](docs/api.md): the HTTP and WebSocket API.
+- [AGENTS.md](AGENTS.md): conventions for contributors, human or AI.
 
 ## Roadmap
 
