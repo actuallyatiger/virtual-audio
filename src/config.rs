@@ -165,6 +165,12 @@ pub struct Processing {
     /// they stay in time with the mic (e.g. singing along to music). Noise
     /// suppression's own 10 ms is matched regardless.
     pub keep_in_time: bool,
+    /// Keep speech at a steady level (like voice chat apps' automatic gain
+    /// control, which their "raw" modes turn off).
+    pub auto_level: bool,
+    /// Automatic level's adjustment (dB) when last saved, so it starts there
+    /// rather than learning your voice again.
+    pub auto_level_db: f32,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -186,6 +192,8 @@ impl Default for Processing {
             gate_db: -45.0,
             extra_strength: false,
             keep_in_time: false,
+            auto_level: false,
+            auto_level_db: 0.0,
         }
     }
 }

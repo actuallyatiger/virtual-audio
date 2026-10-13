@@ -500,7 +500,7 @@ function renderStrips() {
     }
     if (ch.kind === "device") {
       // The cog lights up while any processing is on.
-      const on = [ch.noise_suppression && "noise suppression", ch.noise_gate && `${ch.gate_mode === "auto" ? "automatic" : "manual"} noise gate`].filter(Boolean);
+      const on = [ch.noise_suppression && "noise suppression", ch.auto_level && "automatic level", ch.noise_gate && `${ch.gate_mode === "auto" ? "automatic" : "manual"} noise gate`].filter(Boolean);
       const summary = `Mic processing: ${on.length ? on.join(", ") : "off"}`;
       p.settings.classList.toggle("on", on.length > 0);
       p.settings.title = summary;
@@ -553,6 +553,9 @@ function updateMeters(meters) {
     const state = $("#mic-gate-state");
     state.textContent = mic.mic_gate_open ? "Open" : "Closed";
     state.className = `gate-state ${mic.mic_gate_open ? "open" : "closed"}`;
+    const db = mic.mic_auto_level_db;
+    $("#mic-auto-level-now").textContent =
+      db === undefined ? "" : Math.abs(db) < 0.5 ? "Not changing your level yet." : `Turning you ${db > 0 ? "up" : "down"} ${Math.abs(db).toFixed(1)} dB.`;
   }
 }
 
@@ -773,6 +776,7 @@ function renderMicDialog() {
   }
   $("#mic-title").textContent = `Mic processing: ${src.name}`;
   $("#mic-suppress").checked = src.noise_suppression;
+  $("#mic-auto-level").checked = src.auto_level;
   $("#mic-gate").checked = src.noise_gate;
   $("#mic-gate-controls").hidden = !src.noise_gate;
   for (const r of document.querySelectorAll("#mic-dialog [name=gate-mode]")) r.checked = r.value === src.gate_mode;
@@ -798,6 +802,7 @@ function showThreshold(db) {
 
 const patchMic = (body) => attempt(api("PATCH", `/api/channels/${micDialogId}`, body));
 $("#mic-suppress").addEventListener("change", (e) => patchMic({ noise_suppression: e.target.checked }));
+$("#mic-auto-level").addEventListener("change", (e) => patchMic({ auto_level: e.target.checked }));
 $("#mic-gate").addEventListener("change", (e) => {
   $("#mic-gate-controls").hidden = !e.target.checked;
   patchMic({ noise_gate: e.target.checked });

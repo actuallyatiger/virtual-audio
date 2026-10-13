@@ -26,6 +26,10 @@ It runs as a small tray app and is controlled from a web page served on
   - *Noise suppression* (RNNoise) removes steady background noise such as
     fans, hum and keyboard clatter. With it on, you can turn off Discord's own
     noise suppression, which tends to cut out the soundboard and music.
+  - *Automatic level* keeps your voice at a steady speaking level, like
+    Discord's automatic gain control (which its raw "studio" mode turns
+    off). It turns the mic up or down slowly while you talk and holds still
+    between words, and shows how much it's adjusting by.
   - A *noise gate* silences the mic while you aren't talking. *Automatic*
     mode (the default) opens when RNNoise's voice detector hears speech
     that's louder than the room's background noise, like Discord's automatic

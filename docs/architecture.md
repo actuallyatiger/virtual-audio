@@ -3,7 +3,7 @@
 | Piece | Where |
 | --- | --- |
 | Mixing core: per-source SPSC ring buffers, gain ramps, meters, soft limiter | `src/mixer.rs` |
-| Mic processing: RNNoise noise suppression, and a noise gate driven by RNNoise's voice detector or a level | `src/dsp.rs` |
+| Mic processing: RNNoise noise suppression, automatic level (speech-driven gain), and a noise gate driven by RNNoise's voice detector or a level | `src/dsp.rs` |
 | Audio file decoding (Symphonia) and streaming resampling to 48 kHz | `src/decode.rs` |
 | Soundboard: sounds in memory, trims, playback | `src/soundboard.rs` |
 | Music: playlist, a decode thread streaming tracks from disk, ducking | `src/music.rs` |
@@ -53,7 +53,9 @@ held, the engine's `inner` is always taken before the mixer.
 
 Noise suppression delays the mic by 10 ms (RNNoise's output lags its input
 by a frame). The gate's *extra strength* looks 30 ms ahead. Gathering 10 ms
-frames adds nothing while Windows delivers 10 ms blocks, as it usually does.
+frames adds nothing while Windows delivers 10 ms blocks, as it usually does,
+and automatic level, which only needs the voice detector's verdict, adds
+nothing either.
 The other sources are delayed to match suppression's 10 ms always, and
 extra strength's 30 ms with *keep everything else in time*
 (`Engine::apply_delays`, `Mixer::set_delay`).
