@@ -110,7 +110,12 @@ select {
 .conn.up { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
 .conn.down { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, transparent); }
 
-.switch { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.switch { color: var(--muted); cursor: pointer; white-space: nowrap; }
+/* Checkboxes are centred on their label's capitals: sat on the baseline,
+   then lowered by a whole pixel (a fraction would round differently from
+   row to row). Centring in the line box instead left them low beside
+   Segoe UI. */
+.switch input, label.check input { margin: 0 3px 0 0; vertical-align: -1px; }
 
 .banner {
   margin: 16px 24px 0;
@@ -193,8 +198,8 @@ button.link { border: none; background: none; padding: 0; text-decoration: under
 .meter-fill {
   position: absolute; inset: 0;
   background: linear-gradient(90deg, var(--ok) 0 70%, var(--warn) 85%, var(--bad) 100%);
+  clip-path: inset(0 100% 0 0);
 }
-.meter-mask { position: absolute; top: 0; bottom: 0; right: 0; width: 100%; background: var(--meter-bg); }
 
 .gain-row { display: flex; align-items: center; gap: 8px; }
 .gain { flex: 1; min-width: 0; accent-color: var(--accent); }
@@ -226,7 +231,7 @@ button.with-icon > [data-icon] svg { width: 16px; height: 16px; }
 .gate-mode { border: none; margin: 0; padding: 0; display: grid; gap: 2px; }
 .gate-mode legend { padding: 0; font-size: 12px; color: var(--muted); }
 .gate-mode .check { margin-top: 4px; }
-.check { display: flex; align-items: center; gap: 6px; margin-top: 8px; cursor: pointer; }
+label.check { display: block; margin-top: 8px; cursor: pointer; }
 .gate-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 8px; align-items: center; }
 .gate-controls .hint { grid-column: 1 / -1; margin: 0; }
 .threshold { width: 100%; margin: 0; accent-color: var(--accent); }
@@ -324,7 +329,7 @@ dialog::backdrop { background: rgb(0 0 0 / .5); }
 .setup-btn[data-level=warn] .dot { background: var(--warn); }
 .setup-btn[data-level=error] .dot { background: var(--bad); }
 .checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
-.check { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 8px; align-items: start; }
+.checks > .check { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 8px; align-items: start; }
 .check p { margin: 2px 0 0; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
 .check-icon {
   width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center;

@@ -61,11 +61,11 @@ It runs as a small tray app and is controlled from a web page served on
   don't swallow the key, so it still reaches the game you're in. While an
   app running as administrator is focused (some games do this), Windows
   hides its keys from other apps, so run the mixer as administrator too
-  (Start with Windows → as administrator).
+  (Start with Windows → as Administrator).
 - **Setup check** and **Help** in the top bar, and an ⓘ next to each
   section explaining it.
 - Start with Windows (runs in the background, tray icon only), optionally
-  **as administrator** so hotkeys also work in games that run as
+  **as Administrator** so hotkeys also work in games that run as
   administrator. That uses a Task Scheduler task with highest privileges,
   so Windows asks for permission once rather than at every sign-in. The
   task starts a copy of the mixer in `C:\Program Files\Virtual Audio Mixer`,

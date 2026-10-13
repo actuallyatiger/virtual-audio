@@ -145,7 +145,7 @@ function render(next) {
   if (!adminPending) $("#autostart-admin").checked = state.autostart_admin;
   $("#elevation-note").textContent = state.elevated
     ? "The mixer is running as administrator, so hotkeys also work while apps running as administrator are focused."
-    : "Hotkeys can't see keys while an app running as administrator (some games) is focused. Turn on Start with Windows → as administrator, or run the mixer as administrator, to fix that.";
+    : "Hotkeys can't see keys while an app running as administrator (some games) is focused. Turn on Start with Windows → as Administrator, or run the mixer as administrator, to fix that.";
   renderOutput();
   renderStrips();
   renderMicDialog();
@@ -235,7 +235,7 @@ function createStrip(ch) {
     name: $(".name", node),
     detail: $(".detail", node),
     status: $(".status", node),
-    mask: $(".meter-mask", node),
+    fill: $(".meter-fill", node),
     gain: $(".gain", node),
     gainValue: $(".gain-value", node),
     mute: $(".mute", node),
@@ -503,17 +503,19 @@ function renderStrips() {
 }
 
 /** Shows a linear peak on a meter scaled −60…0 dB. */
-function setMeter(mask, peak) {
+/** Shows a level by clipping the meter's colour bar (clipping, not covering
+ *  it, so no colour peeks out at the rounded ends). */
+function setMeter(fill, peak) {
   const db = peak > 0 ? 20 * Math.log10(peak) : -Infinity;
   const pct = Math.max(0, Math.min(1, (db + 60) / 60));
-  mask.style.width = `${(1 - pct) * 100}%`;
+  fill.style.clipPath = `inset(0 ${(1 - pct) * 100}% 0 0)`;
 }
 
 function updateMeters(meters) {
   for (const [id, m] of Object.entries(meters)) {
     const strip = strips.get(id);
     if (!strip) continue;
-    setMeter(strip.parts.mask, m.peak);
+    setMeter(strip.parts.fill, m.peak);
     strip.el.classList.toggle("gated", !m.open);
   }
   const now = Date.now();
@@ -522,7 +524,7 @@ function updateMeters(meters) {
   }
   const mic = micDialogId && meters[micDialogId];
   if (mic && mic.mic_level !== undefined) {
-    setMeter($("#mic-dialog .mic-meter .meter-mask"), mic.mic_level);
+    setMeter($("#mic-dialog .mic-meter .meter-fill"), mic.mic_level);
     const state = $("#mic-gate-state");
     state.textContent = mic.mic_gate_open ? "Open" : "Closed";
     state.className = `gate-state ${mic.mic_gate_open ? "open" : "closed"}`;
@@ -1453,7 +1455,7 @@ async function saveAutostart(body, input) {
   const admin = body.autostart_admin !== undefined || (body.autostart === false && state.autostart_admin);
   if (admin) {
     adminPending = true;
-    $("#autostart-admin-label").textContent = "as administrator (answer the Windows prompt…)";
+    $("#autostart-admin-label").textContent = "as Administrator (answer the Windows prompt…)";
   }
   $(".topbar-actions").setAttribute("aria-busy", "true");
   try {
@@ -1466,7 +1468,7 @@ async function saveAutostart(body, input) {
     $(".topbar-actions").removeAttribute("aria-busy");
     if (admin) {
       adminPending = false;
-      $("#autostart-admin-label").textContent = "as administrator";
+      $("#autostart-admin-label").textContent = "as Administrator";
     }
   }
 }
