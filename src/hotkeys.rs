@@ -101,7 +101,12 @@ pub fn gate_states<'a>(hotkeys: impl Iterator<Item = (&'a Hotkey, bool)>) -> Has
                 entry.1 |= held;
             }
             HotkeyAction::PushToMute => entry.2 |= held,
-            _ => {}
+            HotkeyAction::ToggleMute
+            | HotkeyAction::PlaySound
+            | HotkeyAction::StopSounds
+            | HotkeyAction::MusicPlayPause
+            | HotkeyAction::MusicNext
+            | HotkeyAction::MusicPrevious => {}
         }
     }
     acc.into_iter()
@@ -112,8 +117,8 @@ pub fn gate_states<'a>(hotkeys: impl Iterator<Item = (&'a Hotkey, bool)>) -> Has
 /// Last seen (keys, held) per hotkey id.
 type PrevHeld = HashMap<String, (String, bool)>;
 
-/// Press-triggered hotkeys (toggle mute, play sound, stop sounds) that were
-/// just pressed. A binding that is new or whose keys changed starts from its
+/// Press-triggered hotkeys (everything but push-to-talk and push-to-mute)
+/// that were just pressed. A binding that is new or whose keys changed starts from its
 /// current state, so recording new keys (which are still held when saved)
 /// doesn't count as a press.
 fn presses<'a>(
@@ -127,10 +132,15 @@ fn presses<'a>(
             Some((keys, was)) if keys == hk.keys => was,
             _ => is_held,
         };
-        let on_press = !matches!(
-            hk.action,
-            HotkeyAction::PushToTalk | HotkeyAction::PushToMute
-        );
+        let on_press = match hk.action {
+            HotkeyAction::PushToTalk | HotkeyAction::PushToMute => false,
+            HotkeyAction::ToggleMute
+            | HotkeyAction::PlaySound
+            | HotkeyAction::StopSounds
+            | HotkeyAction::MusicPlayPause
+            | HotkeyAction::MusicNext
+            | HotkeyAction::MusicPrevious => true,
+        };
         if on_press && is_held && !was {
             pressed.push(hk);
         }
@@ -266,10 +276,18 @@ mod tests {
         assert!(press(&hk, false).is_empty());
         assert_eq!(press(&hk, true), vec!["mic"], "next real press toggles");
 
-        // Sound hotkeys fire on press too; push-to-talk never does.
-        hk.action = HotkeyAction::PlaySound;
-        assert!(press(&hk, false).is_empty());
-        assert_eq!(press(&hk, true), vec!["mic"]);
+        // Sound and music hotkeys fire on press too; push-to-talk never does.
+        for action in [
+            HotkeyAction::PlaySound,
+            HotkeyAction::StopSounds,
+            HotkeyAction::MusicPlayPause,
+            HotkeyAction::MusicNext,
+            HotkeyAction::MusicPrevious,
+        ] {
+            hk.action = action;
+            assert!(press(&hk, false).is_empty());
+            assert_eq!(press(&hk, true), vec!["mic"], "{action:?}");
+        }
         hk.action = HotkeyAction::PushToTalk;
         assert!(press(&hk, false).is_empty());
         assert!(press(&hk, true).is_empty());
