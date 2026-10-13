@@ -190,16 +190,16 @@
         <div class="trim-head">
           <span class="field-label">Trim</span>
           <span class="trim-actions">
-            <button type="button" class="link" id="trim-silence">Trim silence</button>
-            <button type="button" class="link" id="trim-reset">Reset</button>
+            <button type="button" class="small" id="trim-silence" title="Cut the near-silence at both ends">Trim silence</button>
+            <button type="button" class="small bad" id="trim-reset" title="Play the whole file again, with no fades">Reset</button>
           </span>
         </div>
         <canvas id="trim-wave" aria-hidden="true"></canvas>
         <div class="trim-fields">
-          <label>Start <input type="number" id="trim-start" min="0" step="0.01"> s</label>
-          <label>End <input type="number" id="trim-end" min="0" step="0.01"> s</label>
-          <label>Fade in <input type="number" id="fade-in" min="0" max="5" step="0.05"> s</label>
-          <label>Fade out <input type="number" id="fade-out" min="0" max="5" step="0.05"> s</label>
+          <label>Start<span class="unit"><input type="number" id="trim-start" min="0" step="0.01"><span aria-hidden="true">s</span></span></label>
+          <label>End<span class="unit"><input type="number" id="trim-end" min="0" step="0.01"><span aria-hidden="true">s</span></span></label>
+          <label>Fade in<span class="unit"><input type="number" id="fade-in" min="0" max="5" step="0.05"><span aria-hidden="true">s</span></span></label>
+          <label>Fade out<span class="unit"><input type="number" id="fade-out" min="0" max="5" step="0.05"><span aria-hidden="true">s</span></span></label>
         </div>
         <p class="hint small" id="trim-hint">Drag the edges of the highlighted part, or type times. The file itself isn't changed.</p>
       </div>

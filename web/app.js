@@ -1255,6 +1255,7 @@ function showTrim() {
   if (wave) {
     $("#trim-start").max = $("#trim-end").max = secs(wave.duration_ms);
     $("#trim-silence").disabled = wave.silence_start_ms <= trim.start && wave.silence_end_ms >= trim.end;
+    $("#trim-reset").disabled = !trim.start && trim.end >= wave.duration_ms && !trim.fadeIn && !trim.fadeOut;
   }
   drawWave();
 }
@@ -1292,16 +1293,27 @@ function drawWave() {
     g.fillRect(bx, (h - bh) / 2, Math.max(scale, bar - scale), bh);
   });
   g.globalAlpha = 1;
-  // Fades, as a line from silent to full level.
-  g.strokeStyle = css.getPropertyValue("--text").trim();
-  g.lineWidth = 1.5 * scale;
-  g.globalAlpha = 0.6;
-  g.beginPath();
-  g.moveTo(x0, h);
-  g.lineTo(x(trim.start + trim.fadeIn), 2 * scale);
-  g.lineTo(x(trim.end - trim.fadeOut), 2 * scale);
-  g.lineTo(x1, h);
-  g.stroke();
+  // Fades: what they quieten is shaded, under a line from silent to full.
+  const panel = css.getPropertyValue("--panel").trim();
+  const text = css.getPropertyValue("--text").trim();
+  for (const [edge, full] of [[x0, x(trim.start + trim.fadeIn)], [x1, x(trim.end - trim.fadeOut)]]) {
+    if (Math.abs(full - edge) < 1) continue;
+    g.beginPath();
+    g.moveTo(edge, 0);
+    g.lineTo(full, 0);
+    g.lineTo(edge, h);
+    g.closePath();
+    g.fillStyle = panel;
+    g.globalAlpha = 0.55;
+    g.fill();
+    g.beginPath();
+    g.moveTo(edge, h);
+    g.lineTo(full, 0);
+    g.strokeStyle = text;
+    g.lineWidth = 1.5 * scale;
+    g.globalAlpha = 0.6;
+    g.stroke();
+  }
   g.globalAlpha = 1;
   // The draggable edges.
   g.fillStyle = accent;
@@ -1359,6 +1371,12 @@ for (const type of ["pointerup", "pointercancel"]) {
   });
 }
 for (const [sel, key] of [["#trim-start", "start"], ["#trim-end", "end"], ["#fade-in", "fadeIn"], ["#fade-out", "fadeOut"]]) {
+  // Enter applies the time instead of submitting (closing) the dialog.
+  $(sel).addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    e.target.dispatchEvent(new Event("change"));
+  });
   $(sel).addEventListener("change", (e) => {
     const value = Number(e.target.value);
     if (!Number.isFinite(value) || value < 0) return showTrim();
@@ -1381,6 +1399,7 @@ $("#trim-reset").addEventListener("click", () => {
   trim = { start: 0, end: wave.duration_ms, fadeIn: 0, fadeOut: 0 };
   saveTrim(trim);
   showTrim();
+  $("#trim-start").focus(); // Reset disables itself
 });
 window.addEventListener("resize", drawWave);
 
