@@ -204,6 +204,8 @@ pub struct MusicStateView {
     pub duck_db: f32,
     pub hear: bool,
     pub hear_db: f32,
+    /// How many tracks have been taken out of the playlist.
+    pub removed: usize,
     #[serde(flatten)]
     pub player: MusicView,
 }
@@ -495,6 +497,7 @@ impl Engine {
                 duck_db: inner.config.music.duck_db,
                 hear: inner.config.music.hear,
                 hear_db: inner.config.music.hear_db,
+                removed: inner.config.music.removed.len(),
                 player: self.music.view(),
             },
             sounds: inner
@@ -1138,17 +1141,17 @@ impl Engine {
     /// folders, so call it off the async executor.
     fn rescan_music(&self) {
         let _rescanning = self.rescanning.lock().unwrap();
-        let paths: Vec<String> = {
+        let (paths, removed): (Vec<String>, HashSet<std::path::PathBuf>) = {
             let inner = self.inner.lock().unwrap();
-            inner
-                .config
-                .music
-                .items
-                .iter()
-                .map(|i| i.path.clone())
-                .collect()
+            let music = &inner.config.music;
+            (
+                music.items.iter().map(|i| i.path.clone()).collect(),
+                music.removed.iter().map(Into::into).collect(),
+            )
         };
-        self.music.set_tracks(music::scan(&paths));
+        let mut tracks = music::scan(&paths);
+        tracks.retain(|t| !removed.contains(&t.path));
+        self.music.set_tracks(tracks);
         self.changed.send_modify(|v| *v += 1);
     }
 
@@ -1198,15 +1201,58 @@ impl Engine {
 
     pub fn remove_music(&self, id: &str) -> anyhow::Result<()> {
         let mut inner = self.inner.lock().unwrap();
-        let before = inner.config.music.items.len();
-        inner.config.music.items.retain(|i| i.id != id);
-        if inner.config.music.items.len() == before {
+        let music = &mut inner.config.music;
+        let Some(index) = music.items.iter().position(|i| i.id == id) else {
             bail!("no such file or folder");
+        };
+        let item = music.items.remove(index);
+        // Tracks removed from that folder no longer need remembering.
+        music
+            .removed
+            .retain(|r| !std::path::Path::new(r).starts_with(&item.path));
+        self.bump(&mut inner);
+        drop(inner);
+        self.rescan_music();
+        Ok(())
+    }
+
+    /// Takes a track out of the playlist (never off the disk): a file added
+    /// on its own goes, and a track a folder still has is remembered as
+    /// removed. `name` guards against the list having changed meanwhile.
+    pub fn remove_track(&self, track: usize, name: &str) -> anyhow::Result<()> {
+        let Some((path, actual)) = self.music.track(track) else {
+            bail!("no such track");
+        };
+        if actual != name {
+            bail!("the playlist changed; try again");
+        }
+        let mut inner = self.inner.lock().unwrap();
+        let music = &mut inner.config.music;
+        let path_s = path.to_string_lossy().into_owned();
+        music.items.retain(|i| i.path != path_s);
+        let in_folder = music.items.iter().any(|i| path.starts_with(&i.path));
+        if in_folder && !music.removed.contains(&path_s) {
+            if music.removed.len() >= music::MAX_TRACKS {
+                bail!("too many removed tracks: restore them first");
+            }
+            music.removed.push(path_s);
         }
         self.bump(&mut inner);
         drop(inner);
         self.rescan_music();
         Ok(())
+    }
+
+    /// Puts every removed track back.
+    pub fn restore_tracks(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.config.music.removed.is_empty() {
+            return;
+        }
+        inner.config.music.removed.clear();
+        self.bump(&mut inner);
+        drop(inner);
+        self.rescan_music();
     }
 
     pub fn music_control(&self, control: MusicControl) -> anyhow::Result<()> {
@@ -2316,8 +2362,31 @@ mod tests {
         engine.music_control(MusicControl::Pause).unwrap();
         assert!(!engine.state().music.player.playing);
 
+        // Taking a track out of the playlist leaves the file alone.
+        assert!(engine.remove_track(0, "wrong name").is_err());
+        engine.remove_track(0, "1 first").unwrap();
+        let state = engine.state();
+        assert_eq!(state.music.player.tracks, ["2 second"]);
+        assert_eq!(state.music.removed, 1);
+        assert!(dir.join("1 first.wav").exists());
+        engine.restore_tracks();
+        assert_eq!(engine.state().music.player.tracks.len(), 2);
+        engine.remove_track(1, "2 second").unwrap();
+        // A file added on its own (and also in the folder) goes both ways.
+        let file = dir.join("1 first.wav").to_string_lossy().into_owned();
+        engine.add_music(&file).unwrap();
+        engine.remove_track(0, "1 first").unwrap();
+        let state = engine.state();
+        assert!(state.music.player.tracks.is_empty());
+        assert_eq!(state.music.items.len(), 1, "the file item went");
+        assert_eq!(state.music.removed, 2);
+
         engine.remove_music(&id).unwrap();
-        assert!(engine.state().music.player.tracks.is_empty());
+        assert_eq!(
+            engine.state().music.removed,
+            0,
+            "removing the folder forgets its removed tracks"
+        );
         let _ = std::fs::remove_dir_all(&dir);
         engine.shutdown();
     }

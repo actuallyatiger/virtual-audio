@@ -40,6 +40,8 @@ pub struct MusicConfig {
     /// Play the music on your own default output too, at `hear_db`.
     pub hear: bool,
     pub hear_db: f32,
+    /// Tracks taken out of the playlist (paths) that its folders still have.
+    pub removed: Vec<String>,
 }
 
 impl Default for MusicConfig {
@@ -52,6 +54,7 @@ impl Default for MusicConfig {
             duck_db: -12.0,
             hear: true,
             hear_db: 0.0,
+            removed: Vec::new(),
         }
     }
 }
