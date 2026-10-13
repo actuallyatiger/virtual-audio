@@ -38,5 +38,5 @@ jobs:
       - run: cargo build --release
       - uses: actions/upload-artifact@v4
         with:
-          name: virtual-audio-windows-x64
-          path: target/release/virtual-audio.exe
+          name: virtual-audio-mixer-windows-x64
+          path: target/release/virtual-audio-mixer.exe
