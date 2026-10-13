@@ -1,6 +1,13 @@
 "use strict";
 
 const $ = (sel, root = document) => root.querySelector(sel);
+// The dB buttons beside volume sliders, kept so they can be updated while
+// editDb has swapped one out of the page for a text field.
+const dbButtons = {
+  hear: $("#hear-gain-value"),
+  sound: $("#sound-gain-value"),
+  music: $("#hear-music-value"),
+};
 
 let state = null;
 let outputs = [];
@@ -281,7 +288,8 @@ function createStrip(ch) {
     parts.settings.addEventListener("click", () => openMicDialog(id));
   }
 
-  parts.gainValue.addEventListener("click", () => editGain(id, parts));
+  parts.gainValue.addEventListener("click", () =>
+    editDb(parts.gain, parts.gainValue, `${parts.name.value} volume`, (db) => attempt(api("PATCH", `/api/channels/${id}`, { gain_db: db }))));
 
   const sendGain = throttle((db) => attempt(api("PATCH", `/api/channels/${id}`, { gain_db: db })), 60);
   parts.gain.addEventListener("pointerdown", () => (parts.dragging = true));
@@ -317,34 +325,36 @@ function parseDb(text) {
   return Number.isFinite(db) ? Math.max(-60, Math.min(12, Math.round(db * 2) / 2)) : null;
 }
 
-/** Swaps the dB label for a text field; Enter or blur applies, Esc cancels. */
-function editGain(id, parts) {
-  const opened = parts.gain.value;
+/** Swaps a volume slider's dB button for a text field; Enter or blur
+ *  applies (calling `apply` with the new dB), Esc cancels. */
+function editDb(range, button, label, apply) {
+  const opened = range.value;
   const input = el("input", {
     type: "text",
     inputMode: "decimal",
     className: "gain-input",
     value: opened,
-    "aria-label": `${parts.name.value} volume in dB`,
+    "aria-label": `${label} in dB`,
   });
-  parts.gainValue.replaceWith(input);
+  button.replaceWith(input);
   input.focus();
   input.select();
   let done = false;
-  const finish = (apply, refocus) => {
+  const finish = (save, refocus) => {
     if (done) return;
     done = true;
     const db = parseDb(input.value);
     // Only send a change the user made: blurring an untouched field must not
     // overwrite a newer gain that arrived meanwhile.
-    if (apply && db !== null && input.value !== opened) {
-      parts.gain.value = db;
-      parts.gainValue.textContent = formatDb(db);
-      attempt(api("PATCH", `/api/channels/${id}`, { gain_db: db }));
+    if (save && db !== null && input.value !== opened) {
+      range.value = db;
+      button.textContent = formatDb(db);
+      range.setAttribute("aria-valuetext", formatDb(db));
+      apply(db);
     }
-    input.replaceWith(parts.gainValue);
+    input.replaceWith(button);
     // Refocus only for keyboard exits; a click or Tab elsewhere keeps its target.
-    if (refocus) parts.gainValue.focus();
+    if (refocus) button.focus();
   };
   input.addEventListener("keydown", (e) => {
     if (e.key !== "Enter" && e.key !== "Escape") return;
@@ -994,7 +1004,7 @@ function renderHear() {
 
 function showHearGain(db) {
   $("#hear-gain").value = db;
-  $("#hear-gain-value").textContent = formatDb(db);
+  dbButtons.hear.textContent = formatDb(db);
   $("#hear-gain").setAttribute("aria-valuetext", formatDb(db));
 }
 
@@ -1005,6 +1015,8 @@ $("#hear-gain").addEventListener("input", () => {
   showHearGain(db);
   sendHearGain(db);
 });
+dbButtons.hear.addEventListener("click", (e) =>
+  editDb($("#hear-gain"), e.currentTarget, "Hear sounds volume", (db) => attempt(api("PATCH", "/api/soundboard", { hear_sounds_db: db }))));
 
 function soundTile(sound) {
   const ready = sound.state === "ready";
@@ -1180,7 +1192,7 @@ for (const type of ["dragover", "drop"]) {
 
 function showSoundGain(db) {
   $("#sound-gain").value = db;
-  $("#sound-gain-value").textContent = formatDb(db);
+  dbButtons.sound.textContent = formatDb(db);
   $("#sound-gain").setAttribute("aria-valuetext", formatDb(db));
 }
 
@@ -1204,10 +1216,12 @@ function saveSoundName() {
 const sendSoundGain = throttle((id, db) => attempt(api("PATCH", `/api/sounds/${id}`, { gain_db: db })), 60);
 $("#sound-gain").addEventListener("input", () => {
   const db = Number($("#sound-gain").value);
-  $("#sound-gain-value").textContent = formatDb(db);
+  dbButtons.sound.textContent = formatDb(db);
   $("#sound-gain").setAttribute("aria-valuetext", formatDb(db));
   sendSoundGain(editingSound, db);
 });
+dbButtons.sound.addEventListener("click", (e) =>
+  editDb($("#sound-gain"), e.currentTarget, "Sound volume", (db) => attempt(api("PATCH", `/api/sounds/${editingSound}`, { gain_db: db }))));
 $("#sound-name").addEventListener("change", saveSoundName);
 $("#sound-preview").addEventListener("click", () => attempt(api("POST", `/api/sounds/${editingSound}/preview`)));
 $("#sound-delete").addEventListener("click", () => {
@@ -1437,7 +1451,7 @@ function renderMusic() {
   $("#hear-music-row").hidden = !m.hear || !hasTracks;
   if (document.activeElement !== $("#hear-music-gain")) {
     $("#hear-music-gain").value = m.hear_db;
-    $("#hear-music-value").textContent = formatDb(m.hear_db);
+    dbButtons.music.textContent = formatDb(m.hear_db);
   }
 
   let hint = "";
@@ -1552,9 +1566,12 @@ $("#hear-music").addEventListener("click", () => attempt(api("PATCH", "/api/musi
 const sendHearMusic = throttle((db) => attempt(api("PATCH", "/api/music", { hear_db: db })), 60);
 $("#hear-music-gain").addEventListener("input", (e) => {
   const db = Number(e.target.value);
-  $("#hear-music-value").textContent = formatDb(db);
+  dbButtons.music.textContent = formatDb(db);
+  e.target.setAttribute("aria-valuetext", formatDb(db));
   sendHearMusic(db);
 });
+dbButtons.music.addEventListener("click", (e) =>
+  editDb($("#hear-music-gain"), e.currentTarget, "Hear music volume", (db) => attempt(api("PATCH", "/api/music", { hear_db: db }))));
 
 // ---- the files and folders dialog
 
