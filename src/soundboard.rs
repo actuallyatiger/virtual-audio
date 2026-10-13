@@ -21,6 +21,8 @@ pub const MAX_FILE_BYTES: usize = 20 << 20;
 const MAX_SECONDS: u64 = 60;
 /// Stopping or restarting a sound fades it out over 5 ms instead of clicking.
 const FADE_FRAMES: usize = 240;
+/// Fade at a trimmed edge with no fade of its own (2 ms).
+const EDGE_FRAMES: usize = 96;
 /// The soundboard is mixed in 10 ms blocks.
 const BLOCK_FRAMES: usize = SAMPLE_RATE as usize / 100;
 
@@ -383,7 +385,10 @@ impl Player {
         }
         let gain = f32::from_bits(clip.gain.load(Ordering::Relaxed));
         let trim = *clip.trim.lock().unwrap();
-        let (start, end) = trim.range(clip.samples.len() / CHANNELS);
+        let len = clip.samples.len() / CHANNELS;
+        let (start, end) = trim.range(len);
+        // A cut mid-waveform would click, so it always gets a short fade.
+        let edge = |cut: bool, fade: usize| if cut { fade.max(EDGE_FRAMES) } else { fade };
         state.voices.push(Voice {
             id: id.to_owned(),
             clip,
@@ -391,8 +396,8 @@ impl Player {
             pos: start,
             start,
             end,
-            fade_in: trim.fade_in,
-            fade_out: trim.fade_out,
+            fade_in: edge(start > 0, trim.fade_in),
+            fade_out: edge(end < len, trim.fade_out),
             fade: None,
             private,
         });
@@ -721,8 +726,13 @@ mod tests {
         player.play("a");
         let mut buf = vec![0.0; 960];
         mix(&player, &mut buf);
-        assert_eq!(buf[0], 0.01, "starts at frame 100");
-        assert_eq!(buf[199 * 2], 0.0299, "frame 299 is the last");
+        assert_eq!(buf[0], 0.0, "starts at frame 100, fading in from the cut");
+        assert_eq!(
+            buf[EDGE_FRAMES * 2],
+            0.0196,
+            "full level after the edge fade"
+        );
+        assert!(buf[199 * 2] > 0.0, "frame 299 is the last");
         assert_eq!(buf[200 * 2], 0.0, "then stops");
         assert!(player.playing().is_empty());
     }

@@ -1213,6 +1213,8 @@ $("#sound-dialog").addEventListener("close", () => {
   const edit = editingSound && document.querySelector(`#sounds .sound[data-id="${CSS.escape(editingSound)}"] .edit`);
   (edit || $("#add-sound")).focus();
   editingSound = null;
+  // Closed mid-drag (Esc): the release must not save to a closed dialog.
+  trimDrag = null;
 });
 
 // ---- trim editor: the waveform with draggable edges, plus typed times
@@ -1331,7 +1333,7 @@ function saveTrim(changes) {
 const MIN_TRIM_MS = 20;
 
 $("#trim-wave").addEventListener("pointerdown", (e) => {
-  if (!wave || !trim) return;
+  if (!wave || !trim || e.button !== 0) return;
   const rect = e.currentTarget.getBoundingClientRect();
   const ms = ((e.clientX - rect.left) / rect.width) * wave.duration_ms;
   // Grab whichever edge is nearer.
@@ -1371,6 +1373,8 @@ $("#trim-silence").addEventListener("click", () => {
   trim.end = wave.silence_end_ms;
   saveTrim({ start: trim.start, end: trim.end });
   showTrim();
+  // The button disables itself once trimmed: keep focus in the dialog.
+  if ($("#trim-silence").disabled) $("#trim-start").focus();
 });
 $("#trim-reset").addEventListener("click", () => {
   if (!wave) return;
