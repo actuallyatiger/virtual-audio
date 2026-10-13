@@ -1,0 +1,69 @@
+name: Release
+
+# release-please keeps a release PR open that bumps the version in
+# Cargo.toml and adds the new Conventional Commits to CHANGELOG.md. Merging
+# it tags the release as a draft; the Windows build is attached and only
+# then is the release published, so the latest release always has the exe.
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write # the autorelease labels
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  build:
+    name: Windows build
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: virtual-audio
+          path: target/release/virtual-audio.exe
+          if-no-files-found: error
+
+  publish:
+    name: Attach the build and publish
+    needs: [release-please, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: virtual-audio
+      # Always named virtual-audio.exe, so
+      # releases/latest/download/virtual-audio.exe keeps working.
+      - run: |
+          gh release upload "$TAG" virtual-audio.exe --clobber
+          gh release edit "$TAG" --draft=false --latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}

@@ -178,7 +178,17 @@ fn full_state(engine: &Engine) -> serde_json::Value {
     v["elevated"] = json!(platform::is_elevated());
     v["platform_supported"] = json!(PLATFORM_SUPPORTED);
     v["theme"] = json!(engine.theme());
+    v["version"] = json!(crate::VERSION);
+    let copy = platform::admin_copy_version();
+    v["admin_copy_outdated"] = json!(admin_copy_outdated(copy.as_deref()));
+    v["admin_copy_version"] = json!(copy);
     v
+}
+
+/// Whether the copy in Program Files is older than this one, so starting
+/// as administrator would run an old version. Never offers a downgrade.
+fn admin_copy_outdated(copy: Option<&str>) -> bool {
+    copy.is_some_and(|copy| crate::is_older(copy, crate::VERSION))
 }
 
 async fn state(State(app): State<App>) -> Json<serde_json::Value> {
@@ -432,7 +442,11 @@ async fn set_settings(State(app): State<App>, Json(body): Json<Settings>) -> Api
         let run_key = platform::autostart_enabled();
         let want = body.autostart.unwrap_or(admin || run_key);
         let want_admin = want && body.autostart_admin.unwrap_or(admin);
-        if want_admin != admin {
+        // Asking for it again while it's on updates an outdated copy.
+        let update = admin
+            && body.autostart_admin == Some(true)
+            && admin_copy_outdated(platform::admin_copy_version().as_deref());
+        if want_admin != admin || (want_admin && update) {
             platform::set_admin_autostart(want_admin)?;
             e.set_autostart_admin(want_admin);
         }
@@ -540,6 +554,15 @@ async fn send(socket: &mut WebSocket, value: serde_json::Value) -> Result<(), ax
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_an_older_admin_copy_is_outdated() {
+        assert!(!admin_copy_outdated(None));
+        assert!(!admin_copy_outdated(Some(crate::VERSION)));
+        assert!(admin_copy_outdated(Some("unknown")));
+        assert!(admin_copy_outdated(Some("0.0.1")));
+        assert!(!admin_copy_outdated(Some("999.0.0")));
+    }
 
     #[test]
     fn the_page_comes_in_the_chosen_theme() {

@@ -425,7 +425,7 @@
           <h3>Hotkeys</h3>
           <ul>
             <li>Hotkeys work while other apps are focused, such as a game, and don't block the key from reaching that app.</li>
-            <li>Windows hides keys typed into an app running as administrator from apps that aren't, so hotkeys stop working while such an app is focused (some games and their launchers run this way, and voice chat apps' hotkeys have the same limit). To fix it, turn on <b>Start with Windows</b> → <b>as Administrator</b> (Windows asks for permission once, then the mixer starts elevated at every sign-in without asking; it runs a copy in Program Files, so after updating the mixer turn the option off and on again), or right-click <code>virtual-audio.exe</code> → <b>Run as administrator</b>. Some anti-cheat software blocks other apps' hotkeys regardless.</li>
+            <li>Windows hides keys typed into an app running as administrator from apps that aren't, so hotkeys stop working while such an app is focused (some games and their launchers run this way, and voice chat apps' hotkeys have the same limit). To fix it, turn on <b>Start with Windows</b> → <b>as Administrator</b> (Windows asks for permission once, then the mixer starts elevated at every sign-in without asking; it runs a copy in Program Files, which <b>Setup check</b> offers to update after you open a newer version), or right-click <code>virtual-audio.exe</code> → <b>Run as administrator</b>. Some anti-cheat software blocks other apps' hotkeys regardless.</li>
             <li>Actions: <b>toggle mute</b>, <b>push to talk</b> (silent unless held), <b>push to mute</b> (silent while held), <b>play sound</b>, <b>stop all sounds</b>, and music <b>play/pause</b>, <b>next</b> and <b>previous</b>.</li>
             <li>Click a hotkey's keys to record new ones. Keyboard combinations and the mouse side buttons (Mouse4, Mouse5) both work.</li>
           </ul>
@@ -442,6 +442,7 @@
           </ul>
           <p>The app keeps its files in <code>%APPDATA%\VirtualAudioMixer</code>: <code>config.json</code> (your settings), <code>sounds\</code>, and <code>log.txt</code> (this run) and <code>log.previous.txt</code> (the run before), which the tray menu's <b>Open log file</b> opens. A <code>config.json</code> that can't be read is moved aside as <code>config.&lt;time&gt;.json.bad</code>.</p>
         </section>
+        <p class="hint small"><span id="help-version">Virtual Audio Mixer</span> · <a href="https://github.com/actuallyatiger/virtual-audio/releases" target="_blank" rel="noreferrer">Releases and what's new</a></p>
       </div>
     </div>
   </dialog>
