@@ -243,6 +243,7 @@ pub enum MusicControl {
 pub struct SoundboardPatch {
     pub hear_sounds: Option<bool>,
     pub hear_sounds_db: Option<f32>,
+    pub even_sounds: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -291,6 +292,8 @@ pub struct SoundView {
     pub fade_out_ms: u32,
     /// Length of the whole file, once loaded.
     pub duration_ms: Option<u32>,
+    /// How much even out volumes turns it up or down (dB), once loaded.
+    pub even_db: Option<f32>,
     /// "loading", "ready" or "error".
     pub state: &'static str,
     pub message: String,
@@ -308,6 +311,7 @@ pub struct StateView {
     pub monitor: Status,
     pub hear_sounds: bool,
     pub hear_sounds_db: f32,
+    pub even_sounds: bool,
     /// Status of the monitor that plays Hear sounds and Hear music.
     pub hear_status: Status,
     pub music: MusicStateView,
@@ -344,6 +348,7 @@ impl Engine {
         let mixer = Arc::new(Mutex::new(Mixer::new(master.clone())));
         let tap: MonitorTap = Arc::default();
         let player = Arc::new(Player::default());
+        player.set_even(config.even_sounds);
         let changed = tokio::sync::watch::channel(0).0;
         let notify = changed.clone();
         let music = MusicPlayer::new(config.music.shuffle, config.music.repeat, move || {
@@ -495,6 +500,7 @@ impl Engine {
             monitor: inner.listen.status.lock().unwrap().clone(),
             hear_sounds: inner.config.hear_sounds,
             hear_sounds_db: inner.config.hear_sounds_db,
+            even_sounds: inner.config.even_sounds,
             hear_status: inner.hear.status.lock().unwrap().clone(),
             music: MusicStateView {
                 items: inner.config.music.items.clone(),
@@ -528,6 +534,7 @@ impl Engine {
                         fade_in_ms: s.fade_in_ms,
                         fade_out_ms: s.fade_out_ms,
                         duration_ms: self.player.duration_ms(&s.id),
+                        even_db: self.player.even_db(&s.id),
                         state,
                         message,
                     }
@@ -869,6 +876,11 @@ impl Engine {
                             .with_context(|| format!("reading {}", path.display()))?;
                         soundboard::decode(bytes, Some(&ext))
                     });
+                    // Measured before taking the lock; trims can't change
+                    // while a sound is loading.
+                    let even = result.as_ref().map_or(1.0, |samples| {
+                        soundboard::even_gain(samples, trim_of(&sound))
+                    });
                     let Some(engine) = weak.upgrade() else { return };
                     let mut inner = engine.inner.lock().unwrap();
                     // It may have been removed or changed while loading.
@@ -883,6 +895,7 @@ impl Engine {
                                 samples,
                                 db_to_gain(current.gain_db),
                                 trim_of(current),
+                                even,
                             );
                         }
                         Err(e) => {
@@ -927,6 +940,7 @@ impl Engine {
         }
         let ext = soundboard::extension(filename);
         let samples = soundboard::decode(bytes.clone(), Some(&ext))?;
+        let even = soundboard::even_gain(&samples, Trim::default());
         let id = new_id("snd");
         let file = format!("{id}.{ext}");
         let path = soundboard::sounds_dir().join(&file);
@@ -951,7 +965,7 @@ impl Engine {
             let _ = std::fs::remove_file(&path);
             return Err(e);
         }
-        self.player.insert(&id, samples, 1.0, Trim::default());
+        self.player.insert(&id, samples, 1.0, Trim::default(), even);
         inner.config.sounds.push(SoundConfig {
             id: id.clone(),
             name,
@@ -974,6 +988,7 @@ impl Engine {
         if let Some(name) = &patch.name {
             check_len("name", name.trim(), MAX_NAME_CHARS)?;
         }
+        let mut remeasure = false;
         let mut inner = self.inner.lock().unwrap();
         let sound = inner
             .config
@@ -1017,9 +1032,14 @@ impl Engine {
             sound.end_ms = end.filter(|&e| e < duration);
             sound.fade_in_ms = fade_in;
             sound.fade_out_ms = fade_out;
-            self.player.set_trim(id, trim_of(sound));
+            remeasure = self.player.set_trim(id, trim_of(sound));
         }
         self.bump(&mut inner);
+        drop(inner);
+        if remeasure {
+            self.player.measure(id);
+            self.changed.send_modify(|v| *v += 1);
+        }
         Ok(())
     }
 
@@ -1172,6 +1192,10 @@ impl Engine {
         if let Some(on) = patch.hear_sounds {
             inner.config.hear_sounds = on;
             inner.hear.inputs[HEAR_SOUNDS].1.set_muted(!on);
+        }
+        if let Some(on) = patch.even_sounds {
+            inner.config.even_sounds = on;
+            self.player.set_even(on);
         }
         self.bump(&mut inner);
         drop(inner);
@@ -2235,6 +2259,34 @@ mod tests {
     }
 
     #[test]
+    fn a_new_trim_is_measured_for_even_out_volumes() {
+        let engine = engine("cable");
+        // Half a second of loud tone, then half a second of quiet.
+        let tone = |i: usize, amp: f32| (i as f32 * 0.06).sin() * amp * 32_767.0;
+        let samples: Vec<i16> = (0..48_000)
+            .map(|i| tone(i, if i < 24_000 { 0.5 } else { 0.02 }) as i16)
+            .collect();
+        let mut file = crate::decode::test_wav(samples.len());
+        let data = file.len() - samples.len() * 2;
+        file.truncate(data);
+        file.extend(samples.iter().flat_map(|s| s.to_le_bytes()));
+        let id = engine.add_sound(None, "two.wav", file).unwrap();
+        let even = |e: &Engine| e.state().sounds[0].even_db.unwrap();
+        let whole = even(&engine);
+        assert!(whole < 0.0, "the loud half sets it: {whole}");
+        let trim = |start_ms, fade_in_ms| SoundPatch {
+            start_ms: Some(start_ms),
+            fade_in_ms: Some(fade_in_ms),
+            ..Default::default()
+        };
+        engine.update_sound(&id, trim(500, 0)).unwrap();
+        assert!(even(&engine) > whole + 20.0, "just the quiet half");
+        engine.update_sound(&id, trim(500, 20)).unwrap();
+        assert!(even(&engine) > whole + 20.0, "a fade changes nothing");
+        engine.shutdown();
+    }
+
+    #[test]
     fn sounds_bring_the_soundboard_play_and_clean_up() {
         let engine = engine("cable");
         let id = engine.add_sound(None, "Air Horn.wav", wav()).unwrap();
@@ -2342,6 +2394,7 @@ mod tests {
         let off = SoundboardPatch {
             hear_sounds: Some(false),
             hear_sounds_db: Some(-6.0),
+            ..Default::default()
         };
         engine.update_soundboard(off).unwrap();
         assert_eq!(engine.state().hear_status.state, "idle");
@@ -2445,7 +2498,7 @@ mod tests {
         let sound = engine.add_sound(None, "a.wav", wav()).unwrap();
         let off = SoundboardPatch {
             hear_sounds: Some(false),
-            hear_sounds_db: None,
+            ..Default::default()
         };
         engine.update_soundboard(off).unwrap();
         assert_eq!(wait_hear(&engine, "running").state, "running");

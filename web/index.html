@@ -91,7 +91,7 @@
         <ul>
           <li>Click a sound to play it into the mix. Clicking it again restarts it.</li>
           <li>Add MP3, WAV, OGG, FLAC or M4A files up to 60 seconds long with <b>Add sounds</b>, or drop them on the soundboard.</li>
-          <li>A sound's ⚙ renames it, sets its volume, trims it or deletes it. Drag sounds to reorder them, or focus one and press Alt+← or Alt+→.</li>
+          <li>Sounds are evened out to a similar volume, a little below your voice, unless you turn that off in a sound's ⚙. A sound's ⚙ renames it, sets its volume, trims it or deletes it. Drag sounds to reorder them, or focus one and press Alt+← or Alt+→.</li>
           <li><b>Hear sounds</b> also plays them on your Windows default output at <b>Your volume</b>, so you hear them without hearing your own voice.</li>
         </ul>
         <button type="button" class="link" data-help="help-soundboard">More in Help</button>
@@ -234,6 +234,10 @@
       <div class="gain-row">
         <input type="range" id="sound-gain" class="gain" min="-60" max="12" step="0.5">
         <button type="button" id="sound-gain-value" class="gain-value" title="Click to type a value"></button>
+      </div>
+      <div class="even">
+        <label class="check"><input type="checkbox" id="even-sounds"> Even out volumes (all sounds)</label>
+        <p class="hint small" id="sound-even-hint"></p>
       </div>
       <div class="trim" id="trim">
         <div class="trim-head">
@@ -409,6 +413,7 @@
           <ul>
             <li>Add MP3, WAV, OGG, FLAC or M4A files (up to 60 seconds and 20 MB each, 64 sounds) with <b>Add sounds</b> or by dropping them on the soundboard.</li>
             <li>Click a sound to play it; clicking it again restarts it. <b>Stop all</b> stops everything. A sound's ⚙ renames it, sets its own volume or deletes it.</li>
+            <li><b>Even out volumes</b> (in a sound's ⚙, on by default) measures how loud each sound is, the way broadcasters do, and turns it up or down to a similar level a little below a speaking voice, so one loud clip doesn't blast your listeners (who might turn you down for it, voice and all). It never turns a sound up so far that it distorts. Each sound's own volume applies on top, and trimming a sound measures just the part that plays.</li>
             <li>Drag sounds to reorder them, or focus one and press Alt+← or Alt+→.</li>
             <li>To trim a sound, open its ⚙ and drag the edges of its waveform, or type times. <b>Trim silence</b> cuts quiet bits off both ends, fades smooth the start and end, and <b>Preview</b> plays it only to you (through Hear sounds). The file isn't changed, so <b>Reset</b> restores it.</li>
             <li>The soundboard is also a card in the mixer, with its own volume, mute and hotkeys. If you remove that card, the soundboard offers to add it back.</li>

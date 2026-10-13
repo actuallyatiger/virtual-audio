@@ -1000,6 +1000,7 @@ function renderSounds() {
     } else {
       $("#sound-preview").disabled = sound.state !== "ready";
       if (document.activeElement !== $("#sound-gain")) showSoundGain(sound.gain_db);
+      showEven(sound);
       if (!trimDrag) {
         trim = trimOf(sound);
         showTrim();
@@ -1007,6 +1008,18 @@ function renderSounds() {
     }
   }
 }
+
+/** Even out volumes, and how much it's changing the sound being edited. */
+function showEven(sound) {
+  $("#even-sounds").checked = state.even_sounds;
+  const db = sound.even_db;
+  const hint = $("#sound-even-hint");
+  if (!state.even_sounds || db === undefined || db === null) hint.textContent = "";
+  else if (Math.abs(db) < 0.5) hint.textContent = "This sound is already at about the usual level.";
+  else hint.textContent = `This sound is turned ${db > 0 ? "up" : "down"} ${Math.abs(db).toFixed(1)} dB to match, before its own volume.`;
+}
+
+$("#even-sounds").addEventListener("change", (e) => attempt(api("PATCH", "/api/soundboard", { even_sounds: e.target.checked })));
 
 /** Hear sounds: the soundboard on your own headphones, with its own volume. */
 function renderHear() {
@@ -1228,6 +1241,7 @@ function openSoundDialog(id) {
   editingSound = id;
   $("#sound-name").value = sound.name;
   showSoundGain(sound.gain_db);
+  showEven(sound);
   $("#sound-preview").disabled = sound.state !== "ready";
   $("#sound-dialog").showModal();
   loadWaveform(id);

@@ -53,6 +53,10 @@ It runs as a small tray app and is controlled from a web page served on
   restarts it. Drag sounds to reorder them. Each sound has its own volume,
   and the soundboard is a mixer channel with its own volume, mute and
   hotkeys.
+- **Even out volumes** (on by default): each sound is measured (perceived
+  loudness, as in EBU R128) and turned up or down to a similar level a
+  little below a speaking voice, without clipping. A sound's own volume
+  applies on top.
 - **Trim sounds** in a sound's ⚙: drag the edges of its waveform (or type
   times), add fades, or **Trim silence** off both ends in one click.
   Trimming doesn't change the file, so **Reset** brings the whole sound

@@ -5,6 +5,10 @@
 //! sounds that are playing into 10 ms blocks at real-time pace. From there
 //! it is an ordinary source: volume, mute, meter, hotkeys and drift
 //! correction all work as they do for a microphone.
+//!
+//! "Even out volumes" measures each sound's loudness (over its trimmed part)
+//! and turns it towards a common level a little below a speaking voice, so
+//! one loud clip doesn't make listeners turn the whole person down.
 
 use crate::backend::CaptureStream;
 use crate::decode::{AUDIO_EXTENSIONS, TrackDecoder};
@@ -12,7 +16,7 @@ use crate::mixer::{CHANNELS, MonitorTap, SAMPLE_RATE, push_frames};
 use anyhow::bail;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -26,6 +30,13 @@ const FADE_FRAMES: usize = 240;
 const EDGE_FRAMES: usize = 96;
 /// The soundboard is mixed in 10 ms blocks.
 const BLOCK_FRAMES: usize = SAMPLE_RATE as usize / 100;
+/// Even out volumes: the loudness (LUFS) to bring sounds to, a little
+/// below a speaking voice, and how far they may be turned down or up.
+const EVEN_TARGET_LUFS: f32 = -22.0;
+const EVEN_MIN_DB: f32 = -30.0;
+const EVEN_MAX_DB: f32 = 12.0;
+/// ...though never so far up that a peak passes this (-0.2 dBFS).
+const EVEN_CEILING: f32 = 0.977;
 
 pub fn sounds_dir() -> PathBuf {
     crate::config::data_dir().join("sounds")
@@ -113,6 +124,101 @@ struct Clip {
     samples: Vec<f32>,
     gain: AtomicU32,
     trim: Mutex<Trim>,
+    /// Even out volumes' adjustment for the trimmed part (linear).
+    even: AtomicU32,
+}
+
+impl Clip {
+    /// The gain to play at, with `even` saying whether volumes are evened.
+    fn gain(&self, even: bool) -> f32 {
+        let gain = f32::from_bits(self.gain.load(Ordering::Relaxed));
+        if even {
+            gain * f32::from_bits(self.even.load(Ordering::Relaxed))
+        } else {
+            gain
+        }
+    }
+}
+
+/// Integrated loudness (LUFS, ITU-R BS.1770) of interleaved stereo at 48 kHz:
+/// K-weighted, in 400 ms blocks every 100 ms, gated at -70 LUFS and 10 LU
+/// below the ungated loudness. `None` if it is all near-silence.
+pub fn loudness(samples: &[f32]) -> Option<f32> {
+    // K-weighting at 48 kHz: a high shelf (how the head boosts highs), then
+    // a high-pass (bass counts for little).
+    const SHELF: ([f64; 3], [f64; 2]) = (
+        [
+            1.535_124_859_586_97,
+            -2.691_696_189_406_38,
+            1.198_392_810_852_85,
+        ],
+        [-1.690_659_293_182_41, 0.732_480_774_215_85],
+    );
+    const HIGH_PASS: ([f64; 3], [f64; 2]) = (
+        [1.0, -2.0, 1.0],
+        [-1.990_047_454_833_98, 0.990_072_250_366_21],
+    );
+    fn biquad((b, a): ([f64; 3], [f64; 2]), x: f64, z: &mut [f64; 2]) -> f64 {
+        let y = b[0] * x + z[0];
+        z[0] = b[1] * x - a[0] * y + z[1];
+        z[1] = b[2] * x - a[1] * y;
+        y
+    }
+    // Running sum of the weighted energy (both channels), per frame.
+    let mut state = [[[0f64; 2]; 2]; CHANNELS];
+    let mut energy = Vec::with_capacity(samples.len() / CHANNELS + 1);
+    energy.push(0f64);
+    let mut sum = 0f64;
+    for frame in samples.as_chunks::<CHANNELS>().0 {
+        for (s, z) in frame.iter().zip(&mut state) {
+            let y = biquad(HIGH_PASS, biquad(SHELF, *s as f64, &mut z[0]), &mut z[1]);
+            sum += y * y;
+        }
+        energy.push(sum);
+    }
+    let frames = energy.len() - 1;
+    let block = (SAMPLE_RATE as usize * 4 / 10).min(frames);
+    if block == 0 {
+        return None;
+    }
+    let step = (SAMPLE_RATE as usize / 10).min(block);
+    let blocks: Vec<f64> = (0..=frames - block)
+        .step_by(step)
+        .map(|i| (energy[i + block] - energy[i]) / block as f64)
+        .collect();
+    let lufs = |z: f64| -0.691 + 10.0 * z.log10();
+    let mean = |zs: &mut dyn Iterator<Item = f64>| {
+        let (sum, n) = zs.fold((0.0, 0), |(s, n), z| (s + z, n + 1));
+        (n > 0).then(|| sum / n as f64)
+    };
+    let loud = mean(&mut blocks.iter().copied().filter(|&z| lufs(z) > -70.0))?;
+    let relative = lufs(loud) - 10.0;
+    let gated = mean(
+        &mut blocks
+            .iter()
+            .copied()
+            .filter(|&z| lufs(z) > -70.0 && lufs(z) > relative),
+    )?;
+    Some(lufs(gated) as f32)
+}
+
+/// Even out volumes' adjustment (linear) for the part of `samples` that
+/// `trim` plays. A long sound takes a while (tens of ms), so callers measure
+/// it outside the engine's lock.
+pub fn even_gain(samples: &[f32], trim: Trim) -> f32 {
+    let (start, end) = trim.range(samples.len() / CHANNELS);
+    let part = &samples[start * CHANNELS..end * CHANNELS];
+    let Some(lufs) = loudness(part) else {
+        return 1.0;
+    };
+    let db = (EVEN_TARGET_LUFS - lufs).clamp(EVEN_MIN_DB, EVEN_MAX_DB);
+    let peak = part.iter().fold(0f32, |m, s| m.max(s.abs()));
+    let gain = 10f32.powf(db / 20.0);
+    if gain > 1.0 && peak * gain > EVEN_CEILING {
+        (EVEN_CEILING / peak).max(1.0)
+    } else {
+        gain
+    }
 }
 
 struct Voice {
@@ -171,16 +277,20 @@ struct PlayerState {
 #[derive(Default)]
 pub struct Player {
     state: Mutex<PlayerState>,
+    /// Even out volumes.
+    even: AtomicBool,
     /// Hear sounds: a copy of the soundboard's output for your headphones.
     pub tap: MonitorTap,
 }
 
 impl Player {
-    pub fn insert(&self, id: &str, samples: Vec<f32>, gain: f32, trim: Trim) {
+    /// Loads a sound. `even` is [`even_gain`] for `samples` and `trim`.
+    pub fn insert(&self, id: &str, samples: Vec<f32>, gain: f32, trim: Trim, even: f32) {
         let clip = Arc::new(Clip {
             samples,
             gain: AtomicU32::new(gain.to_bits()),
             trim: Mutex::new(trim),
+            even: AtomicU32::new(even.to_bits()),
         });
         self.state.lock().unwrap().clips.insert(id.to_owned(), clip);
     }
@@ -218,11 +328,38 @@ impl Player {
         }
     }
 
-    /// Changes a sound's trim for its next plays.
-    pub fn set_trim(&self, id: &str, trim: Trim) {
-        if let Some(clip) = self.state.lock().unwrap().clips.get(id) {
-            *clip.trim.lock().unwrap() = trim;
-        }
+    /// Changes a sound's trim for its next plays. Returns whether the part
+    /// that plays changed (not just its fades), so it needs [`Self::measure`].
+    pub fn set_trim(&self, id: &str, trim: Trim) -> bool {
+        let Some(clip) = self.state.lock().unwrap().clips.get(id).cloned() else {
+            return false;
+        };
+        let old = std::mem::replace(&mut *clip.trim.lock().unwrap(), trim);
+        (old.start, old.end) != (trim.start, trim.end)
+    }
+
+    /// Measures the loudness of the part of a sound that plays, for even
+    /// out volumes, outside the lock the soundboard mixes under.
+    pub fn measure(&self, id: &str) {
+        let Some(clip) = self.state.lock().unwrap().clips.get(id).cloned() else {
+            return;
+        };
+        let trim = *clip.trim.lock().unwrap();
+        let even = even_gain(&clip.samples, trim);
+        clip.even.store(even.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Turns even out volumes on or off, including for sounds playing now.
+    pub fn set_even(&self, on: bool) {
+        self.even.store(on, Ordering::Relaxed);
+    }
+
+    /// How much even out volumes turns a loaded sound up or down (dB),
+    /// whether or not it's on.
+    pub fn even_db(&self, id: &str) -> Option<f32> {
+        let state = self.state.lock().unwrap();
+        let even = f32::from_bits(state.clips.get(id)?.even.load(Ordering::Relaxed));
+        Some(20.0 * even.log10())
     }
 
     /// Plays a sound (its trimmed part) from the start. If it is already
@@ -249,7 +386,7 @@ impl Player {
         {
             v.fade.get_or_insert(FADE_FRAMES);
         }
-        let gain = f32::from_bits(clip.gain.load(Ordering::Relaxed));
+        let gain = clip.gain(self.even.load(Ordering::Relaxed));
         let trim = *clip.trim.lock().unwrap();
         let len = clip.samples.len() / CHANNELS;
         let (start, end) = trim.range(len);
@@ -324,8 +461,9 @@ impl Player {
         monitor.fill(0.0);
         let mut state = self.state.lock().unwrap();
         let frames = (out.len() / CHANNELS) as f32;
+        let even = self.even.load(Ordering::Relaxed);
         for v in &mut state.voices {
-            let target = f32::from_bits(v.clip.gain.load(Ordering::Relaxed));
+            let target = v.clip.gain(even);
             let step = (target - v.gain) / frames;
             let rest = v
                 .clip
@@ -414,6 +552,95 @@ impl CaptureStream for Stream {
 mod tests {
     use super::*;
 
+    /// `seconds` of a 997 Hz sine at `amp` in both channels.
+    fn sine(seconds: f32, amp: f32) -> Vec<f32> {
+        let frames = (seconds * SAMPLE_RATE as f32) as usize;
+        (0..frames)
+            .flat_map(|i| {
+                let t = i as f32 / SAMPLE_RATE as f32;
+                [(std::f32::consts::TAU * 997.0 * t).sin() * amp; CHANNELS]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn loudness_matches_the_standard() {
+        // BS.1770: a full-scale 997 Hz sine in both channels is 0 LUFS.
+        let full = loudness(&sine(2.0, 1.0)).unwrap();
+        assert!(full.abs() < 0.1, "{full}");
+        let quiet = loudness(&sine(2.0, 0.1)).unwrap();
+        assert!((quiet + 20.0).abs() < 0.1, "{quiet}");
+        // Short sounds are measured as one block; silence isn't measured.
+        let short = loudness(&sine(0.1, 0.1)).unwrap();
+        assert!((short + 20.0).abs() < 0.5, "{short}");
+        assert_eq!(loudness(&vec![0.0; 96_000]), None);
+        // The silent gaps in a sound don't make it count as quieter (bar
+        // the blocks that straddle them).
+        let mut gappy = sine(1.0, 0.1);
+        gappy.extend(vec![0.0; 192_000]);
+        gappy.extend(sine(1.0, 0.1));
+        let gappy = loudness(&gappy).unwrap();
+        assert!((gappy + 20.0).abs() < 1.0, "{gappy}");
+    }
+
+    #[test]
+    fn even_out_brings_sounds_towards_one_level() {
+        let db = |g: f32| 20.0 * g.log10();
+        // -3 LUFS: turned down 19 dB to -22.
+        let loud = db(even_gain(&sine(1.0, 0.7), Trim::default()));
+        assert!((loud + 19.0).abs() < 0.3, "{loud}");
+        // -32 LUFS, with plenty of headroom: up the full 10 dB.
+        let quiet = db(even_gain(&sine(1.0, 0.025), Trim::default()));
+        assert!((quiet - 10.0).abs() < 0.3, "{quiet}");
+        // -50 LUFS would want +28 dB: up the most it goes.
+        let faint = db(even_gain(&sine(1.0, 0.003), Trim::default()));
+        assert!((faint - EVEN_MAX_DB).abs() < 0.01, "{faint}");
+        // A quiet sound with a loud click in it isn't boosted into clipping.
+        let mut spiky = sine(1.0, 0.01);
+        spiky[1000] = 0.9;
+        let spiky = even_gain(&spiky, Trim::default());
+        assert!(spiky * 0.9 <= EVEN_CEILING + 1e-6, "{spiky}");
+        // Only the trimmed part counts.
+        let mut two = sine(1.0, 0.7);
+        two.extend(sine(1.0, 0.07));
+        let second = Trim::from_ms(1000, None, 0, 0);
+        let part = db(even_gain(&two, second));
+        assert!((part - 1.0).abs() < 0.3, "{part}");
+    }
+
+    #[test]
+    fn even_out_applies_while_on_and_follows_the_trim() {
+        let player = Player::default();
+        let mut two = sine(1.0, 0.5);
+        two.extend(sine(1.0, 0.05));
+        let even = even_gain(&two, Trim::default());
+        player.insert("a", two, 1.0, Trim::default(), even);
+        let peak = |player: &Player| {
+            player.play("a");
+            let mut buf = vec![0.0; 9_600 * CHANNELS];
+            mix(player, &mut buf);
+            player.stop_all();
+            mix(player, &mut vec![0.0; 960 * CHANNELS]);
+            buf.iter().fold(0f32, |m, s| m.max(s.abs()))
+        };
+        assert!((peak(&player) - 0.5).abs() < 0.01, "off: as it is");
+        player.set_even(true);
+        let evened = peak(&player);
+        let expected = 0.5 * 10f32.powf(player.even_db("a").unwrap() / 20.0);
+        assert!(evened < 0.5 && (evened - expected).abs() < 0.01, "{evened}");
+        let before = player.even_db("a").unwrap();
+        assert!(
+            !player.set_trim("a", Trim::from_ms(0, None, 10, 10)),
+            "fades only"
+        );
+        assert!(player.set_trim("a", Trim::from_ms(1000, None, 0, 0)));
+        player.measure("a");
+        assert!(
+            player.even_db("a").unwrap() > before + 10.0,
+            "the quiet half is turned up more"
+        );
+    }
+
     /// Mixes into `buf`, discarding the monitor copy.
     fn mix(player: &Player, buf: &mut [f32]) {
         let mut monitor = vec![0.0; buf.len()];
@@ -475,7 +702,7 @@ mod tests {
     #[test]
     fn plays_restarts_and_stops() {
         let player = Player::default();
-        player.insert("a", vec![0.5; 1_000 * 2], 1.0, Trim::default());
+        player.insert("a", vec![0.5; 1_000 * 2], 1.0, Trim::default(), 1.0);
         assert!(!player.play("missing"));
         assert!(player.play("a"));
         let mut buf = vec![0.0; 960];
@@ -509,7 +736,7 @@ mod tests {
     #[test]
     fn removing_fades_and_clearing_drops() {
         let player = Player::default();
-        player.insert("a", vec![0.5; 4_000 * 2], 1.0, Trim::default());
+        player.insert("a", vec![0.5; 4_000 * 2], 1.0, Trim::default(), 1.0);
         player.play("a");
         player.remove("a");
         assert!(!player.contains("a"));
@@ -519,7 +746,7 @@ mod tests {
         assert_eq!(buf[FADE_FRAMES * 2], 0.0);
         assert!(player.state.lock().unwrap().voices.is_empty());
 
-        player.insert("b", vec![0.5; 4_000 * 2], 1.0, Trim::default());
+        player.insert("b", vec![0.5; 4_000 * 2], 1.0, Trim::default(), 1.0);
         player.play("b");
         player.clear();
         assert!(player.playing().is_empty());
@@ -530,7 +757,7 @@ mod tests {
     #[test]
     fn sounds_end_on_their_own() {
         let player = Player::default();
-        player.insert("a", vec![0.25; 100 * 2], 1.0, Trim::default());
+        player.insert("a", vec![0.25; 100 * 2], 1.0, Trim::default(), 1.0);
         player.play("a");
         let mut buf = vec![0.0; 960];
         mix(&player, &mut buf);
@@ -569,7 +796,7 @@ mod tests {
             end: Some(300),
             ..Trim::default()
         };
-        player.insert("a", ramp(1_000), 1.0, trim);
+        player.insert("a", ramp(1_000), 1.0, trim, 1.0);
         player.play("a");
         let mut buf = vec![0.0; 960];
         mix(&player, &mut buf);
@@ -593,7 +820,7 @@ mod tests {
             end: Some(400),
             ..Trim::default()
         };
-        player.insert("a", vec![0.5; 1_000 * 2], 1.0, trim);
+        player.insert("a", vec![0.5; 1_000 * 2], 1.0, trim, 1.0);
         player.play("a");
         let mut buf = vec![0.0; 960];
         mix(&player, &mut buf);
@@ -607,7 +834,7 @@ mod tests {
     #[test]
     fn previews_are_heard_but_not_mixed() {
         let player = Player::default();
-        player.insert("a", vec![0.5; 1_000 * 2], 1.0, Trim::default());
+        player.insert("a", vec![0.5; 1_000 * 2], 1.0, Trim::default(), 1.0);
         assert!(player.preview("a"));
         assert!(
             player.playing().is_empty(),
@@ -625,7 +852,7 @@ mod tests {
         let mut clip = vec![0.0; 4_800 * 2]; // 100 ms silence
         clip.extend(vec![0.5; 4_800 * 2]); // 100 ms sound
         clip.extend(vec![0.0; 9_600 * 2]); // 200 ms silence
-        player.insert("a", clip, 1.0, Trim::default());
+        player.insert("a", clip, 1.0, Trim::default(), 1.0);
         let w = player.waveform("a", 40).unwrap();
         assert_eq!(w.duration_ms, 400);
         assert_eq!(w.peaks.len(), 40);
