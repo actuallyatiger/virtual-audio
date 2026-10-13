@@ -10,7 +10,7 @@
 use crate::backend::{Backend, CaptureStream, CaptureTarget, DeviceInfo, NullRender, RenderStream};
 use crate::config::{
     Channel, Config, DeviceRef, GateMode, Hotkey, HotkeyAction, MusicItem, Processing, Repeat,
-    SoundConfig, SourceConfig, SourceKind, db_to_gain, new_id,
+    SoundConfig, SourceConfig, SourceKind, Theme, db_to_gain, new_id,
 };
 use crate::dsp::{ProcessingControl, Processor};
 use crate::mixer::{ChannelControl, Mixer, MonitorTap, push_frames, source_ring};
@@ -587,6 +587,16 @@ impl Engine {
 
     pub fn hotkeys(&self) -> Vec<Hotkey> {
         self.inner.lock().unwrap().config.hotkeys.clone()
+    }
+
+    pub fn theme(&self) -> Theme {
+        self.inner.lock().unwrap().config.theme
+    }
+
+    pub fn set_theme(&self, theme: Theme) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.config.theme = theme;
+        self.bump(&mut inner);
     }
 
     /// Controls for every channel, keyed by "master" or source id.
@@ -2090,6 +2100,15 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         engine.state().monitor
+    }
+
+    #[test]
+    fn theme_is_kept_and_announced() {
+        let engine = engine("cable");
+        let before = engine.version();
+        engine.set_theme(Theme::Dark);
+        assert_eq!(engine.theme(), Theme::Dark);
+        assert!(engine.version() > before);
     }
 
     #[test]
