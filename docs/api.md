@@ -5,7 +5,7 @@ The UI's server listens on `http://127.0.0.1:47800` by default (`port` in
 
 | Method | Path | Body |
 | --- | --- | --- |
-| GET | `/api/state` | Everything the UI shows, including `version`, `admin_copy_version` (the Program Files copy's version if there is one, `"unknown"` if it predates versions) and `admin_copy_outdated` |
+| GET | `/api/state` | Everything the UI shows, including `version`, `admin_copy_version` (the Program Files copy's version if there is one, `"unknown"` if it predates versions) and `admin_copy_outdated`. Each sound has `even_db`, how much even out volumes (`even_sounds`) turns it up or down. |
 | GET | `/api/devices` | |
 | GET | `/api/apps` | |
 | POST | `/api/sources` | `{"kind":"app","exe":"chrome.exe"}` or `{"kind":"device","device":null}`, plus an optional `"name"`; or `{"kind":"soundboard"}` / `{"kind":"music"}` (one of each) |
@@ -21,7 +21,7 @@ The UI's server listens on `http://127.0.0.1:47800` by default (`port` in
 | POST | `/api/sounds/{id}/play` | Plays (or restarts) a sound. |
 | POST | `/api/sounds/stop` | Stops all sounds. |
 | PUT | `/api/sounds/order` | `{"ids":["…","…"]}` (every sound id, in the new order) |
-| PATCH | `/api/soundboard` | `{"hear_sounds":true,"hear_sounds_db":-6}` |
+| PATCH | `/api/soundboard` | `{"hear_sounds":true,"hear_sounds_db":-6,"even_sounds":true}` |
 | POST | `/api/music/items` | `{"path":"C:\\Users\\you\\Music"}`: a folder or audio file. Adds the music player to the mix if it isn't there. |
 | DELETE | `/api/music/items/{id}` | |
 | DELETE | `/api/music/items` | Clears the playlist (the files stay) |

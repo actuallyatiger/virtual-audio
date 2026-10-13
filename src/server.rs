@@ -302,7 +302,11 @@ async fn update_sound(
     Path(id): Path<String>,
     Json(body): Json<SoundPatch>,
 ) -> ApiResult {
-    app.engine.update_sound(&id, body).map_err(bad)?;
+    // A new trim measures the sound's loudness again, which takes a moment.
+    blocking(&app, StatusCode::BAD_REQUEST, move |e| {
+        e.update_sound(&id, body)
+    })
+    .await?;
     ok()
 }
 
