@@ -234,6 +234,9 @@ button.with-icon > [data-icon] svg { width: 16px; height: 16px; }
 .gate-mode { border: none; margin: 0; padding: 0; display: grid; gap: 2px; }
 .gate-mode legend { padding: 0; font-size: 12px; color: var(--muted); }
 .gate-mode .check { margin-top: 4px; }
+.gate-extra .check { margin-top: 0; }
+.gate-extra .hint { margin: 2px 0 0; }
+.gate-keep { margin: 8px 0 0 19px; }
 label.check { display: block; margin-top: 8px; cursor: pointer; }
 .gate-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 8px; align-items: center; }
 .gate-controls .hint { grid-column: 1 / -1; margin: 0; }

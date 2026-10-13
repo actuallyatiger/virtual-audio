@@ -765,6 +765,10 @@ function renderMicDialog() {
   $("#mic-gate-controls").hidden = !src.noise_gate;
   for (const r of document.querySelectorAll("#mic-dialog [name=gate-mode]")) r.checked = r.value === src.gate_mode;
   const manual = src.gate_mode === "manual";
+  $("#mic-extra").hidden = manual;
+  $("#mic-extra-strength").checked = src.extra_strength;
+  $("#mic-keep").hidden = !src.extra_strength;
+  $("#mic-keep-in-time").checked = src.keep_in_time;
   $("#mic-threshold").hidden = $("#mic-threshold-value").hidden = $("#mic-threshold-mark").hidden = !manual;
   $("#mic-gate-hint").textContent = manual
     ? "The meter shows your mic. Set the line just above where it sits while you're quiet."
@@ -789,6 +793,11 @@ $("#mic-gate").addEventListener("change", (e) => {
 for (const r of document.querySelectorAll("#mic-dialog [name=gate-mode]")) {
   r.addEventListener("change", () => patchMic({ gate_mode: r.value }));
 }
+$("#mic-extra-strength").addEventListener("change", (e) => {
+  $("#mic-keep").hidden = !e.target.checked;
+  patchMic({ extra_strength: e.target.checked });
+});
+$("#mic-keep-in-time").addEventListener("change", (e) => patchMic({ keep_in_time: e.target.checked }));
 const sendThreshold = throttle((id, db) => attempt(api("PATCH", `/api/channels/${id}`, { gate_db: db })), 60);
 $("#mic-threshold").addEventListener("input", (e) => {
   const db = Number(e.target.value);

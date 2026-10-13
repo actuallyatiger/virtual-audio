@@ -192,6 +192,8 @@ pub struct ChannelPatch {
     pub noise_gate: Option<bool>,
     pub gate_mode: Option<GateMode>,
     pub gate_db: Option<f32>,
+    pub extra_strength: Option<bool>,
+    pub keep_in_time: Option<bool>,
 }
 
 /// The music player for the UI: settings, list and what's playing.
@@ -646,7 +648,9 @@ impl Engine {
         let processing_patch = patch.noise_suppression.is_some()
             || patch.noise_gate.is_some()
             || patch.gate_mode.is_some()
-            || patch.gate_db.is_some();
+            || patch.gate_db.is_some()
+            || patch.extra_strength.is_some()
+            || patch.keep_in_time.is_some();
         let mut inner = self.inner.lock().unwrap();
         let (channel, ctrl) = if id == MASTER {
             if processing_patch {
@@ -687,6 +691,13 @@ impl Engine {
                 src.processing.gate_db = db.clamp(-60.0, 0.0);
                 processing.set_threshold_db(src.processing.gate_db);
             }
+            if let Some(on) = patch.extra_strength {
+                src.processing.extra_strength = on;
+                processing.set_extra_strength(on);
+            }
+            if let Some(on) = patch.keep_in_time {
+                src.processing.keep_in_time = on;
+            }
             (&mut src.channel, ctrl)
         };
         if let Some(db) = patch.gain_db {
@@ -697,8 +708,33 @@ impl Engine {
             channel.muted = muted;
             ctrl.set_muted(muted);
         }
+        self.apply_delays(&inner);
         self.bump(&mut inner);
         Ok(())
+    }
+
+    /// Keeps the other sources in time with the mics' processing: noise
+    /// suppression's 10 ms always, and extra strength's 30 ms look-ahead if
+    /// the mic asks to (keep everything else in time). Each source is
+    /// delayed by how far it would otherwise be ahead.
+    fn apply_delays(&self, inner: &Inner) {
+        // (How late a source's audio is, how much of that to match.)
+        let lateness = |s: &SourceConfig| {
+            let p = &s.processing;
+            if !matches!(s.kind, SourceKind::Device { .. }) {
+                return (0, 0);
+            }
+            let extra = p.noise_gate && p.gate_mode == GateMode::Auto && p.extra_strength;
+            let late = crate::dsp::delay_frames(p.noise_suppression, extra);
+            let matched = crate::dsp::delay_frames(p.noise_suppression, extra && p.keep_in_time);
+            (late, matched)
+        };
+        let sources = &inner.config.sources;
+        let align = sources.iter().map(|s| lateness(s).1).max().unwrap_or(0);
+        let mut mixer = self.mixer.lock().unwrap();
+        for s in sources {
+            mixer.set_delay(&s.id, align.saturating_sub(lateness(s).0));
+        }
     }
 
     pub fn toggle_mute(&self, id: &str) {
@@ -1472,6 +1508,8 @@ impl Engine {
             self.restart_output(&mut inner);
             changed = true;
         }
+        // A new source joins the others' delay, if any.
+        self.apply_delays(&inner);
         // Ducking listens to the microphones.
         *self.music.duck.mics.lock().unwrap() = inner
             .config
@@ -1701,12 +1739,16 @@ impl SourceRuntime {
                 db_to_gain(channel.gain_db),
                 channel.muted,
             )),
-            processing: Arc::new(ProcessingControl::new(
-                p.noise_suppression,
-                p.noise_gate,
-                p.gate_mode == GateMode::Auto,
-                p.gate_db,
-            )),
+            processing: {
+                let control = ProcessingControl::new(
+                    p.noise_suppression,
+                    p.noise_gate,
+                    p.gate_mode == GateMode::Auto,
+                    p.gate_db,
+                );
+                control.set_extra_strength(p.extra_strength);
+                Arc::new(control)
+            },
             status: Arc::new(Mutex::new(Status::new("waiting", "Starting…"))),
             capture: None,
             pid: None,
@@ -2507,6 +2549,71 @@ mod tests {
         engine.play_sound("good").unwrap();
         let err = engine.play_sound("missing").unwrap_err();
         assert!(err.to_string().contains("nope.wav"), "{err}");
+        engine.shutdown();
+    }
+
+    #[test]
+    fn extra_strength_can_keep_the_other_sources_in_time() {
+        let engine = engine("cable");
+        let mic = engine
+            .add_source(None, SourceKind::Device { device: None })
+            .unwrap();
+        let delays = |e: &Engine| {
+            let mut d: Vec<_> = e.mixer.lock().unwrap().delays.clone().into_iter().collect();
+            d.sort();
+            d
+        };
+        let patch = |extra, keep| ChannelPatch {
+            noise_gate: Some(true),
+            extra_strength: Some(extra),
+            keep_in_time: Some(keep),
+            ..Default::default()
+        };
+        engine.update_channel(&mic, patch(true, false)).unwrap();
+        assert!(delays(&engine).is_empty(), "only if asked");
+        engine.update_channel(&mic, patch(true, true)).unwrap();
+        let frames = crate::dsp::LOOKAHEAD_FRAMES;
+        assert_eq!(
+            delays(&engine),
+            [
+                ("a".into(), frames),
+                ("b".into(), frames),
+                ("c".into(), frames)
+            ],
+            "everything but the mic"
+        );
+        let manual = ChannelPatch {
+            gate_mode: Some(GateMode::Manual),
+            ..Default::default()
+        };
+        // Noise suppression delays the mic another 10 ms, always matched.
+        let suppress = |on| ChannelPatch {
+            noise_suppression: Some(on),
+            ..Default::default()
+        };
+        engine.update_channel(&mic, suppress(true)).unwrap();
+        let frames = crate::dsp::delay_frames(true, true);
+        assert_eq!(frames, 1_920, "40 ms");
+        assert_eq!(delays(&engine)[0], ("a".into(), frames));
+        engine.update_channel(&mic, manual).unwrap();
+        let ten_ms = crate::dsp::delay_frames(true, false);
+        assert_eq!(
+            delays(&engine)[0],
+            ("a".into(), ten_ms),
+            "suppression's 10 ms"
+        );
+        engine.update_channel(&mic, suppress(false)).unwrap();
+        assert!(delays(&engine).is_empty(), "nothing to match");
+        let src = engine
+            .state()
+            .sources
+            .into_iter()
+            .find(|s| s.id == mic)
+            .unwrap();
+        assert!(
+            src.processing.extra_strength && src.processing.keep_in_time,
+            "saved"
+        );
         engine.shutdown();
     }
 

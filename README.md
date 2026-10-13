@@ -33,8 +33,16 @@ It runs as a small tray app and is controlled from a web page served on
     live meter. Either way it stays open for 200 ms after you stop talking,
     so word endings aren't clipped, and it only gates the mic: the
     soundboard and apps always get through.
+  - *Extra strength* (automatic mode) makes the gate stricter, so sudden
+    sounds like a glass put down or a finger snap don't open it. It listens
+    30 ms ahead so it doesn't cut off your words' starts, which adds 30 ms
+    delay to the mic; *Keep everything else in time* adds the same delay to
+    the other sources, e.g. to sing along to music in the mix. (Noise
+    suppression's own 10 ms is always matched, without a setting.)
 
-  Either one adds up to 10 ms of delay and makes the mic mono.
+  Either one makes the mic mono and delays it by up to 10 ms (extra
+  strength: 30 ms more); the other sources are delayed to match noise
+  suppression's 10 ms automatically.
 - **Soundboard**: add MP3, WAV, OGG, FLAC or M4A files (up to 60 seconds and
   20 MB each, 64 sounds) with **+ Add sounds** or by dropping them on the
   soundboard. Click a sound to play it into the mix; clicking it again
@@ -187,7 +195,9 @@ loaded. Each source keeps about 30 ms of buffer, so total added latency is
 roughly 40–60 ms. Sources and the output run on separate clocks, so the mixer
 corrects drift continuously: when a source's buffer strays from its target it
 takes one frame more or less per 10 ms block and stretches the block to fit, a
-pitch change of about 0.2% for that block.
+pitch change of about 0.2% for that block. A source's target can be raised
+to delay it, keeping it in time with a mic whose processing runs late (see
+`Engine::apply_delays`).
 
 The web UI is plain HTML/CSS/JS with no build step. It is compiled into the
 executable with `include_str!`, so the release is a single `.exe`.
@@ -201,7 +211,7 @@ executable with `include_str!`, so the release is a single `.exe`.
 | GET | `/api/apps` | |
 | POST | `/api/sources` | `{"kind":"app","exe":"chrome.exe"}` or `{"kind":"device","device":null}`, plus an optional `"name"`; or `{"kind":"soundboard"}` / `{"kind":"music"}` (one of each) |
 | PUT | `/api/sources/order` | `{"ids":["…","…"]}` (every source id, in the new order) |
-| PATCH | `/api/channels/{id or "master"}` | `{"gain_db":-6,"muted":true,"name":"…"}` (`name` applies to sources only). Input devices also take `noise_suppression`, `noise_gate` (booleans), `gate_mode` (`"auto"` or `"manual"`) and `gate_db` (−60 to 0, for manual). |
+| PATCH | `/api/channels/{id or "master"}` | `{"gain_db":-6,"muted":true,"name":"…"}` (`name` applies to sources only). Input devices also take `noise_suppression`, `noise_gate` (booleans), `gate_mode` (`"auto"` or `"manual"`), `gate_db` (−60 to 0, for manual), and `extra_strength` and `keep_in_time` (booleans, for automatic). |
 | DELETE | `/api/channels/{id}` | Removing the soundboard keeps its sounds, and removing the music keeps its playlist (and pauses it); add them back with `POST /api/sources` `{"kind":"soundboard"}` or `{"kind":"music"}`. |
 | PUT | `/api/output` | `{"device":{"id":"…","name":"…"}}` or `{"device":null}` |
 | POST | `/api/sounds?filename=horn.mp3&name=…` | The raw file. Adds the soundboard to the mix if it isn't there. |
