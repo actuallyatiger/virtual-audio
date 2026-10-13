@@ -1417,6 +1417,7 @@ window.addEventListener("resize", drawWave);
 // ---------------------------------------------------------------- music
 
 let lastTracks = "";
+let lastCurrent = null;
 let lastMusicHint = null;
 const musicBack = el("button", { type: "button", className: "link", textContent: "Add it back" });
 musicBack.addEventListener("click", () => attempt(api("POST", "/api/sources", { kind: "music" })));
@@ -1489,6 +1490,15 @@ function renderMusic() {
     if (on) li.firstChild.setAttribute("aria-current", "true");
     else li.firstChild.removeAttribute("aria-current");
   });
+  // Keep a new current track in view, scrolling the list (not the page).
+  if (current !== lastCurrent) {
+    lastCurrent = current;
+    const li = list.children[current];
+    if (li) {
+      const r = li.getBoundingClientRect(), box = list.getBoundingClientRect();
+      if (r.top < box.top || r.bottom > box.bottom) list.scrollTop += r.top - box.top - (box.height - r.height) / 2;
+    }
+  }
 
   if ($("#music-dialog").open) renderMusicItems();
 }
@@ -1496,7 +1506,12 @@ function renderMusic() {
 function updateMusicPosition(ms) {
   if (ms === undefined || seeking || !state) return;
   $("#music-seek").value = ms;
+  showSeek(ms);
+}
+function showSeek(ms) {
   $("#music-pos").textContent = clock(ms);
+  const dur = state.music.duration_ms;
+  $("#music-seek").setAttribute("aria-valuetext", dur ? `${clock(ms)} of ${clock(dur)}` : clock(ms));
 }
 
 const musicControl = (body) => attempt(api("POST", "/api/music/control", body));
@@ -1511,7 +1526,23 @@ $("#music-repeat").addEventListener("click", () => {
 $("#music-duck").addEventListener("change", (e) => attempt(api("PATCH", "/api/music", { duck: e.target.checked })));
 $("#music-seek").addEventListener("input", (e) => {
   seeking = true;
-  $("#music-pos").textContent = clock(Number(e.target.value));
+  showSeek(Number(e.target.value));
+});
+// The range is in milliseconds: arrow keys move 5 s and Page keys 30 s
+// rather than a millisecond at a time.
+$("#music-seek").addEventListener("keydown", (e) => {
+  const step = { ArrowLeft: -5000, ArrowDown: -5000, ArrowRight: 5000, ArrowUp: 5000, PageDown: -30000, PageUp: 30000 }[e.key];
+  const max = Number(e.target.max);
+  let to;
+  if (step) to = Number(e.target.value) + step;
+  else if (e.key === "Home") to = 0;
+  else if (e.key === "End") to = max - 1000;
+  else return;
+  e.preventDefault();
+  to = Math.max(0, Math.min(max, to));
+  e.target.value = to;
+  showSeek(to);
+  musicControl({ action: "seek", position_ms: to });
 });
 $("#music-seek").addEventListener("change", (e) => {
   seeking = false;
@@ -1527,13 +1558,24 @@ $("#hear-music-gain").addEventListener("input", (e) => {
 
 // ---- the files and folders dialog
 
+let lastItems = null; // rebuilt only when the items change, keeping focus
 function renderMusicItems() {
   const items = state.music.items;
+  const signature = JSON.stringify(items);
+  if (signature === lastItems) return;
+  lastItems = signature;
+  // A removed item's button had focus: move it to the next one.
+  const focused = document.activeElement?.closest?.("#music-items li");
+  const index = focused ? [...$("#music-items").children].indexOf(focused) : -1;
   $("#music-items").replaceChildren(...(items.length ? items.map((item) => {
     const remove = el("button", { type: "button", className: "ghost icon", "data-icon": "close", title: "Remove", "aria-label": `Remove ${item.path}` });
     remove.addEventListener("click", () => attempt(api("DELETE", `/api/music/items/${item.id}`)));
     return el("li", {}, el("span", { className: "path", textContent: item.path }), remove);
   }) : [el("li", { className: "empty", textContent: "Nothing added yet." })]));
+  if (index >= 0) {
+    const buttons = $("#music-items").querySelectorAll("button");
+    (buttons[Math.min(index, buttons.length - 1)] || $("#music-path")).focus();
+  }
 }
 
 function musicError(message) {
@@ -1558,6 +1600,7 @@ $("#music-add").addEventListener("click", () => {
   musicError("");
   $("#music-path").value = "";
   $("#music-browse").hidden = !state.platform_supported;
+  lastItems = null;
   renderMusicItems();
   $("#music-dialog").showModal();
   $("#music-path").focus();

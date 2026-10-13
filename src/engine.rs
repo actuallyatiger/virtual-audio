@@ -31,6 +31,8 @@ const RETRY_DELAY: Duration = Duration::from_secs(3);
 const MAX_NAME_CHARS: usize = 100;
 const MAX_SOURCES: usize = 64;
 const MAX_HOTKEYS: usize = 64;
+const MAX_PATH_CHARS: usize = 1_000;
+const MAX_MUSIC_ITEMS: usize = 200;
 
 fn check_len(what: &str, value: &str, max: usize) -> anyhow::Result<()> {
     if value.chars().count() > max {
@@ -118,9 +120,10 @@ struct Inner {
 }
 
 /// Something played on the Windows default output (your headphones), fed
-/// from a tap: Listen (the final mix) or Hear sounds (the soundboard).
+/// from taps: Listen (the final mix), or Hear sounds and Hear music (the
+/// soundboard and the music, each with its own volume).
 struct Monitor {
-    /// What it's for, in messages: "listen", "hear sounds".
+    /// What it's for, in messages: "listen", "hear sounds and music".
     what: &'static str,
     /// What it plays, each with its own volume.
     inputs: Vec<(MonitorTap, Arc<ChannelControl>)>,
@@ -175,6 +178,8 @@ pub struct Engine {
     /// Serializes supervise() runs (the supervisor thread and add_source),
     /// which no longer hold `inner` throughout.
     supervising: Mutex<()>,
+    /// Serializes playlist rescans, so an older scan can't land last.
+    rescanning: Mutex<()>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -298,7 +303,7 @@ pub struct StateView {
     pub monitor: Status,
     pub hear_sounds: bool,
     pub hear_sounds_db: f32,
-    /// Hear sounds status.
+    /// Status of the monitor that plays Hear sounds and Hear music.
     pub hear_status: Status,
     pub music: MusicStateView,
     pub sounds: Vec<SoundView>,
@@ -347,7 +352,7 @@ impl Engine {
         );
         // Hear sounds and Hear music share one monitor, each muted when off.
         let hear = Monitor::new(
-            "hear sounds",
+            "hear sounds and music",
             vec![
                 (
                     player.tap.clone(),
@@ -390,6 +395,7 @@ impl Engine {
             tap,
             changed,
             shutdown: AtomicBool::new(false),
+            rescanning: Mutex::new(()),
             supervising: Mutex::new(()),
         });
         engine.restart_output(&mut engine.inner.lock().unwrap());
@@ -965,7 +971,17 @@ impl Engine {
     /// Plays a sound to you alone, through Hear sounds, to try out a trim.
     pub fn preview_sound(&self, id: &str) -> anyhow::Result<()> {
         let inner = self.inner.lock().unwrap();
-        if inner.hear.status.lock().unwrap().state != "running" {
+        // The Hear monitor also runs for Hear music, so check the sounds'
+        // part of it is on.
+        let has_soundboard = inner
+            .config
+            .sources
+            .iter()
+            .any(|s| s.kind == SourceKind::Soundboard);
+        if !inner.config.hear_sounds
+            || !has_soundboard
+            || inner.hear.status.lock().unwrap().state != "running"
+        {
             bail!("previews play through Hear sounds, which isn't playing right now");
         }
         if !self.player.preview(id) {
@@ -1121,6 +1137,7 @@ impl Engine {
     /// Re-reads the playlist's files and folders. Can take a while for big
     /// folders, so call it off the async executor.
     fn rescan_music(&self) {
+        let _rescanning = self.rescanning.lock().unwrap();
         let paths: Vec<String> = {
             let inner = self.inner.lock().unwrap();
             inner
@@ -1405,7 +1422,7 @@ impl Engine {
             .iter()
             .filter(|s| matches!(s.kind, SourceKind::Device { .. }))
             .filter_map(|s| inner.sources.get(&s.id))
-            .map(|rt| rt.processing.clone())
+            .map(|rt| (rt.processing.clone(), rt.ctrl.clone()))
             .collect();
         let output = inner.config.output.clone();
         let (listening, hearing) = (!inner.listeners.is_empty(), hear_wanted(&inner));
@@ -1674,9 +1691,6 @@ fn reorder<T>(
     items.sort_by_key(|item| ids.iter().position(|i| i == id(item)));
     Ok(())
 }
-
-const MAX_PATH_CHARS: usize = 1_000;
-const MAX_MUSIC_ITEMS: usize = 200;
 
 /// Which of the Hear monitor's inputs is which.
 const HEAR_SOUNDS: usize = 0;
@@ -2041,24 +2055,7 @@ mod tests {
 
     /// A short 16-bit mono WAV file.
     fn wav() -> Vec<u8> {
-        wav_of(4_800)
-    }
-
-    /// A 16-bit mono 48 kHz WAV file `frames` long.
-    fn wav_of(frames: usize) -> Vec<u8> {
-        let samples = vec![1000i16; frames];
-        let data_len = (samples.len() * 2) as u32;
-        let mut f = Vec::new();
-        f.extend(b"RIFF");
-        f.extend((36 + data_len).to_le_bytes());
-        f.extend(b"WAVEfmt ");
-        for v in [16u32, 1 | (1 << 16), 48_000, 96_000, 2 | (16 << 16)] {
-            f.extend(v.to_le_bytes());
-        }
-        f.extend(b"data");
-        f.extend(data_len.to_le_bytes());
-        f.extend(samples.iter().flat_map(|s| s.to_le_bytes()));
-        f
+        crate::decode::test_wav(4_800)
     }
 
     fn hotkey(action: HotkeyAction, target: &str) -> Hotkey {
@@ -2265,7 +2262,7 @@ mod tests {
         // A second each: longer than the decoder's half-second lead, so
         // the current track follows playback rather than decoding.
         for name in ["1 first.wav", "2 second.wav", "notes.txt"] {
-            std::fs::write(dir.join(name), wav_of(48_000)).unwrap();
+            std::fs::write(dir.join(name), crate::decode::test_wav(48_000)).unwrap();
         }
         let folder = dir.to_string_lossy().into_owned();
 
@@ -2285,10 +2282,21 @@ mod tests {
             "the first music adds the player to the mix"
         );
 
+        // Hear music keeps the Hear monitor running, but a preview needs
+        // Hear sounds itself.
+        let sound = engine.add_sound(None, "a.wav", wav()).unwrap();
+        let off = SoundboardPatch {
+            hear_sounds: Some(false),
+            hear_sounds_db: None,
+        };
+        engine.update_soundboard(off).unwrap();
+        assert_eq!(wait_hear(&engine, "running").state, "running");
+        assert!(engine.preview_sound(&sound).is_err());
+
         engine
             .music_control(MusicControl::Play { track: 0 })
             .unwrap();
-        // The music source's thread plays the 100 ms tracks back to back.
+        // The music source's thread plays the 1 s tracks back to back.
         let mut current = Vec::new();
         for _ in 0..600 {
             let c = engine.state().music.player.current;

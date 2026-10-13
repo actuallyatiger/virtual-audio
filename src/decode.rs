@@ -328,6 +328,24 @@ impl Resampler {
 }
 
 /// Resamples a whole buffer.
+/// A 16-bit mono 48 kHz WAV file `frames` long, for tests.
+#[cfg(test)]
+pub fn test_wav(frames: usize) -> Vec<u8> {
+    let samples = vec![1000i16; frames];
+    let data_len = (samples.len() * 2) as u32;
+    let mut f = Vec::new();
+    f.extend(b"RIFF");
+    f.extend((36 + data_len).to_le_bytes());
+    f.extend(b"WAVEfmt ");
+    for v in [16u32, 1 | (1 << 16), 48_000, 96_000, 2 | (16 << 16)] {
+        f.extend(v.to_le_bytes());
+    }
+    f.extend(b"data");
+    f.extend(data_len.to_le_bytes());
+    f.extend(samples.iter().flat_map(|s| s.to_le_bytes()));
+    f
+}
+
 #[cfg(test)]
 pub fn resample(input: &[f32], from: u32) -> Vec<f32> {
     let mut r = Resampler::new(from);

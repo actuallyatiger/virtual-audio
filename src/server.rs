@@ -11,7 +11,7 @@ use axum::extract::{DefaultBodyLimit, Path, Query, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, patch, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
@@ -90,7 +90,7 @@ pub fn router(engine: Arc<Engine>, port: u16, quit: Arc<dyn Fn() + Send + Sync>)
         .route("/api/soundboard", patch(update_soundboard))
         .route("/api/music", patch(update_music))
         .route("/api/music/items", post(add_music))
-        .route("/api/music/items/{id}", axum::routing::delete(remove_music))
+        .route("/api/music/items/{id}", delete(remove_music))
         .route("/api/music/control", post(music_control))
         .route("/api/music/browse", post(browse_music))
         .route("/api/sounds/{id}", patch(update_sound).delete(remove_sound))

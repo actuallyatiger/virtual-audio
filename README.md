@@ -66,7 +66,8 @@ It runs as a small tray app and is controlled from a web page served on
   the default output is the device the mix already goes to. Expect about
   100 ms of delay on your own voice.
 - **Global hotkeys**: toggle mute, push-to-talk or push-to-mute on any
-  channel, play a sound, or stop all sounds.
+  channel, play a sound, stop all sounds, or play/pause, skip or go back
+  in the music.
   Keyboard combos and mouse side buttons (Mouse4/Mouse5) both work. Hotkeys
   don't swallow the key, so it still reaches the game you're in. While an
   app running as administrator is focused (some games do this), Windows
@@ -122,7 +123,7 @@ into Explorer's address bar, or use the tray's **Open log file**):
 
 | File | What it is |
 | --- | --- |
-| `config.json` | Your sources, output, hotkeys, sounds and volumes. |
+| `config.json` | Your sources, output, hotkeys, sounds, music playlist and volumes. |
 | `sounds\` | Copies of the files you added to the soundboard. |
 | `config.<timestamp>.json.bad` | A `config.json` that could not be read. It is moved aside and the app starts with defaults, so you can repair it. If it can't be moved aside, the app doesn't start rather than overwrite it. |
 | `log.txt` | This run's log: every source and output it opens, errors, and crashes. |
@@ -197,10 +198,10 @@ executable with `include_str!`, so the release is a single `.exe`.
 | GET | `/api/state` | |
 | GET | `/api/devices` | |
 | GET | `/api/apps` | |
-| POST | `/api/sources` | `{"kind":"app","exe":"chrome.exe"}` or `{"kind":"device","device":null}`, plus an optional `"name"` |
+| POST | `/api/sources` | `{"kind":"app","exe":"chrome.exe"}` or `{"kind":"device","device":null}`, plus an optional `"name"`; or `{"kind":"soundboard"}` / `{"kind":"music"}` (one of each) |
 | PUT | `/api/sources/order` | `{"ids":["…","…"]}` (every source id, in the new order) |
 | PATCH | `/api/channels/{id or "master"}` | `{"gain_db":-6,"muted":true,"name":"…"}` (`name` applies to sources only). Input devices also take `noise_suppression`, `noise_gate` (booleans), `gate_mode` (`"auto"` or `"manual"`) and `gate_db` (−60 to 0, for manual). |
-| DELETE | `/api/channels/{id}` | Removing the soundboard keeps its sounds; add it back with `POST /api/sources` `{"kind":"soundboard"}`. |
+| DELETE | `/api/channels/{id}` | Removing the soundboard keeps its sounds, and removing the music keeps its playlist (and pauses it); add them back with `POST /api/sources` `{"kind":"soundboard"}` or `{"kind":"music"}`. |
 | PUT | `/api/output` | `{"device":{"id":"…","name":"…"}}` or `{"device":null}` |
 | POST | `/api/sounds?filename=horn.mp3&name=…` | The raw file. Adds the soundboard to the mix if it isn't there. |
 | PATCH | `/api/sounds/{id}` | `{"name":"…","gain_db":-6,"start_ms":120,"end_ms":1500,"fade_in_ms":0,"fade_out_ms":50}` (`"end_ms":null` plays to the end) |
@@ -219,13 +220,14 @@ executable with `include_str!`, so the release is a single `.exe`.
 | PUT | `/api/hotkeys` | `[{"keys":"Ctrl+Shift+M","action":"push_to_talk","target":"…"}]`. Actions: `toggle_mute`, `push_to_talk`, `push_to_mute` (target: `master` or a source id), `play_sound` (target: a sound id), `stop_sounds`, `music_play_pause`, `music_next`, `music_previous`. |
 | PUT | `/api/settings` | `{"autostart":true,"autostart_admin":false}`. Changing `autostart_admin` shows a Windows permission prompt and waits for it. |
 | POST | `/api/quit` | Stops the app. |
-| GET | `/ws` | WebSocket: pushes `state` on change (including `monitor`, Listen's `{state, message}`) and `meters` about 30 times a second (with `playing`, the sounds playing now, and each mic's `mic_level` and `mic_gate_open`). Send `{"type":"listen","on":true}` to monitor the mix; it plays while any connection has it on, and a connection's request ends when it closes. |
+| GET | `/ws` | WebSocket: pushes `state` on change (including `monitor`, Listen's `{state, message}`) and `meters` about 30 times a second (with `playing`, the sounds playing now, each mic's `mic_level` and `mic_gate_open`, and `music_position_ms`). Send `{"type":"listen","on":true}` to monitor the mix; it plays while any connection has it on, and a connection's request ends when it closes. |
 
 Requests whose `Host` or `Origin` isn't `127.0.0.1`/`localhost` on our port are
 rejected, and the UI can't be embedded in another site's frame. This stops
 other websites from controlling the mixer. Invalid input gets a 400 with a
-message; names are limited to 100 characters, and sources and hotkeys to 64
-each.
+message; names are limited to 100 characters, sources and hotkeys to 64
+each, and the playlist to 200 files and folders (10,000 tracks; a folder
+scan also stops after 200,000 entries).
 
 ## Roadmap
 

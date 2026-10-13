@@ -233,6 +233,14 @@ mod imp {
             FOS_ALLOWMULTISELECT, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS,
             FileOpenDialog, IFileOpenDialog, SIGDN_FILESYSPATH,
         };
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+        };
+        let spec: Vec<String> = crate::decode::AUDIO_EXTENSIONS
+            .iter()
+            .map(|e| format!("*.{e}"))
+            .collect();
+        let spec = HSTRING::from(spec.join(";"));
         unsafe {
             CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
             let result = (|| -> anyhow::Result<Vec<String>> {
@@ -247,13 +255,33 @@ mod imp {
                     dialog.SetTitle(w!("Add music files"))?;
                     dialog.SetFileTypes(&[COMDLG_FILTERSPEC {
                         pszName: w!("Audio files"),
-                        pszSpec: w!(
-                            "*.mp3;*.wav;*.ogg;*.oga;*.flac;*.m4a;*.mp4;*.aac;*.mka;*.mkv;*.webm"
-                        ),
+                        pszSpec: PCWSTR(spec.as_ptr()),
                     }])?;
                 }
                 dialog.SetOptions(options)?;
-                if let Err(e) = dialog.Show(None) {
+                // The mixer runs in the background, so Windows won't bring
+                // its windows in front of the browser. An always-on-top
+                // owner keeps the picker above it instead of hidden behind.
+                let owner = CreateWindowExW(
+                    WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+                    w!("STATIC"),
+                    PCWSTR::null(),
+                    WS_POPUP,
+                    0,
+                    0,
+                    0,
+                    0,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .ok();
+                let shown = dialog.Show(owner);
+                if let Some(owner) = owner {
+                    let _ = DestroyWindow(owner);
+                }
+                if let Err(e) = shown {
                     if e.code() == ERROR_CANCELLED.to_hresult() {
                         return Ok(Vec::new());
                     }
@@ -263,8 +291,9 @@ mod imp {
                 let mut paths = Vec::new();
                 for i in 0..items.GetCount()? {
                     let name = items.GetItemAt(i)?.GetDisplayName(SIGDN_FILESYSPATH)?;
-                    paths.push(name.to_string()?);
+                    let path = name.to_string();
                     CoTaskMemFree(Some(name.0 as *const _));
+                    paths.push(path?);
                 }
                 Ok(paths)
             })();
