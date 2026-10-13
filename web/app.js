@@ -1523,6 +1523,7 @@ function renderMusic() {
     }
   }
 
+  $("#music-clear").hidden = !m.items.length;
   const restore = $("#music-restore");
   restore.hidden = !m.removed;
   restore.textContent = `Restore ${m.removed} removed track${m.removed === 1 ? "" : "s"}`;
@@ -1587,6 +1588,11 @@ dbButtons.music.addEventListener("click", (e) =>
 
 // ---- the files and folders dialog
 
+$("#music-clear").addEventListener("click", () => {
+  if (!confirm("Clear the playlist? The files stay where they are.")) return;
+  attempt(api("DELETE", "/api/music/items"));
+  $("#music-add").focus(); // the button hides itself
+});
 $("#music-restore").addEventListener("click", () => {
   attempt(api("POST", "/api/music/tracks/restore"));
   $("#music-path").focus(); // the button hides itself

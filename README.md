@@ -49,9 +49,9 @@ It runs as a small tray app and is controlled from a web page served on
   with the Windows file picker. Tracks stream from disk one after another,
   with play/pause, next/previous, seeking, shuffle and repeat (all or one),
   and hotkeys for play/pause, next and previous. A track's × takes it out
-  of the playlist (the file stays). **Turn the music down while
-  I talk** ducks it while your mic hears you. Music is its own mixer channel,
-  and **Hear music** plays it to you at your own volume.
+  of the playlist and **Clear** empties it (the files stay). **Turn the
+  music down while I talk** ducks it while your mic hears you. Music is its
+  own mixer channel, and **Hear music** plays it to you at your own volume.
 - **Hear sounds** (on by default): the soundboard also plays on your Windows
   default output, at its own volume, so you hear your own sounds without
   hearing your own voice. It pauses while Listen is on, since Listen
@@ -215,6 +215,7 @@ executable with `include_str!`, so the release is a single `.exe`.
 | PATCH | `/api/soundboard` | `{"hear_sounds":true,"hear_sounds_db":-6}` |
 | POST | `/api/music/items` | `{"path":"C:\\Users\\you\\Music"}`: a folder or audio file. Adds the music player to the mix if it isn't there. |
 | DELETE | `/api/music/items/{id}` | |
+| DELETE | `/api/music/items` | Clears the playlist (the files stay) |
 | POST | `/api/music/control` | `{"action":"toggle"}`, `pause`, `next`, `previous`, `{"action":"play","track":3}`, `{"action":"seek","position_ms":60000}` |
 | PATCH | `/api/music` | `{"shuffle":true,"repeat":"all","duck":true,"duck_db":-12,"hear":true,"hear_db":-6}` (`repeat`: `off`, `all`, `one`) |
 | POST | `/api/music/tracks/remove` | `{"track":3,"name":"Song"}` (its index and name in the list): takes it out of the playlist, never off the disk |
