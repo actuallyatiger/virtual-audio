@@ -89,7 +89,7 @@ pub fn router(engine: Arc<Engine>, port: u16, quit: Arc<dyn Fn() + Send + Sync>)
         .route("/api/sounds/order", put(reorder_sounds))
         .route("/api/soundboard", patch(update_soundboard))
         .route("/api/music", patch(update_music))
-        .route("/api/music/items", post(add_music))
+        .route("/api/music/items", post(add_music).delete(clear_music))
         .route("/api/music/items/{id}", delete(remove_music))
         .route("/api/music/control", post(music_control))
         .route("/api/music/tracks/remove", post(remove_track))
@@ -337,6 +337,15 @@ struct TrackRef {
     /// Index in the playlist, and its name as the UI showed it.
     track: usize,
     name: String,
+}
+
+async fn clear_music(State(app): State<App>) -> ApiResult {
+    blocking(&app, StatusCode::BAD_REQUEST, move |e| {
+        e.clear_music();
+        Ok(())
+    })
+    .await?;
+    ok()
 }
 
 async fn remove_track(State(app): State<App>, Json(body): Json<TrackRef>) -> ApiResult {

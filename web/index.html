@@ -111,6 +111,7 @@
         <div class="panel-actions">
           <button id="hear-music" class="ghost listen with-icon" aria-pressed="false"
             title="Also play the music on your Windows default output (use headphones)"><span data-icon="headphones" aria-hidden="true"></span>Hear music</button>
+          <button id="music-clear" class="ghost" hidden title="Take everything out of the playlist (the files stay)">Clear</button>
           <button id="music-add" class="primary with-icon"><span data-icon="plus" aria-hidden="true"></span>Add music</button>
         </div>
       </div>
@@ -118,7 +119,7 @@
         <ul>
           <li>Plays audio files and whole folders into the mix, one track after another. Files stay where they are.</li>
           <li><b>Add music</b> takes a folder or file path, or opens the Windows file picker.</li>
-          <li>Shuffle and repeat are next to the play button. Click a track in the list to play it, or its × to take it out of the playlist (the file stays).</li>
+          <li>Shuffle and repeat are next to the play button. Click a track in the list to play it, or its × to take it out of the playlist (the file stays). <b>Clear</b> empties the playlist.</li>
           <li><b>Turn the music down while I talk</b> lowers it whenever your mic hears you.</li>
           <li><b>Hear music</b> plays it on your Windows default output too, at <b>Your volume</b>.</li>
         </ul>
@@ -405,7 +406,7 @@
           <h3>Music</h3>
           <ul>
             <li><b>Add music</b> adds folders (searched, including subfolders) or single files by their path. Copy a folder's path from Explorer's address bar, or use <b>Folders…</b> / <b>Files…</b> to pick them in a Windows file picker. Files are played where they are, not copied.</li>
-            <li>Tracks play one after another, from the disk, so long tracks and big folders are fine. Click a track to play it. Its <b>×</b> takes it out of the playlist without deleting the file; <b>Restore removed tracks</b> in <b>Add music</b> brings them back, and removing a folder forgets the tracks removed from it. Shuffle mixes the order up; repeat goes round the list, or repeats one track.</li>
+            <li>Tracks play one after another, from the disk, so long tracks and big folders are fine. Click a track to play it. Its <b>×</b> takes it out of the playlist without deleting the file; <b>Restore removed tracks</b> in <b>Add music</b> brings them back, and removing a folder forgets the tracks removed from it. <b>Clear</b> empties the whole playlist; again, no files are deleted. Shuffle mixes the order up; repeat goes round the list, or repeats one track.</li>
             <li><b>Turn the music down while I talk</b> lowers it while your mic hears you: by the noise gate if it's on, otherwise when you're loud enough.</li>
             <li>The music is a card in the mixer with its own volume, mute and hotkeys (play/pause, next, previous). <b>Hear music</b> plays it on your Windows default output at <b>Your volume</b>; it pauses while Listen is on.</li>
           </ul>

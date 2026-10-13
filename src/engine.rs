@@ -1243,6 +1243,17 @@ impl Engine {
         Ok(())
     }
 
+    /// Empties the playlist (the files stay where they are).
+    pub fn clear_music(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        let music = &mut inner.config.music;
+        music.items.clear();
+        music.removed.clear();
+        self.bump(&mut inner);
+        drop(inner);
+        self.rescan_music();
+    }
+
     /// Puts every removed track back.
     pub fn restore_tracks(&self) {
         let mut inner = self.inner.lock().unwrap();
@@ -2387,6 +2398,14 @@ mod tests {
             0,
             "removing the folder forgets its removed tracks"
         );
+
+        engine.add_music(&folder).unwrap();
+        engine.remove_track(0, "1 first").unwrap();
+        engine.clear_music();
+        let state = engine.state();
+        assert!(state.music.items.is_empty() && state.music.player.tracks.is_empty());
+        assert_eq!(state.music.removed, 0);
+        assert!(dir.join("1 first.wav").exists(), "files stay");
         let _ = std::fs::remove_dir_all(&dir);
         engine.shutdown();
     }
