@@ -43,6 +43,9 @@ const ICONS = {
   stop: `<svg ${SVG}><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/></svg>`,
   headphones: `<svg ${SVG}><path d="M4 16v-4a8 8 0 0 1 16 0v4"/><rect x="3" y="14" width="4.5" height="7" rx="1.5"/><rect x="16.5" y="14" width="4.5" height="7" rx="1.5"/></svg>`,
   close: `<svg ${SVG}><path d="M6 6l12 12M18 6L6 18"/></svg>`,
+  sun: `<svg ${SVG}><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></svg>`,
+  moon: `<svg ${SVG}><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>`,
+  themeAuto: `<svg ${SVG}><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor" stroke="none"/></svg>`,
   info: `<svg ${SVG}><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle cx="12" cy="7.5" r="1.2" fill="currentColor" stroke="none"/></svg>`,
   grip: `<svg ${SVG}><g fill="currentColor" stroke="none"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></g></svg>`,
 };
@@ -153,6 +156,7 @@ function connect() {
 
 function render(next) {
   state = next;
+  if (!themeSaves && state.theme !== appliedTheme) applyTheme(state.theme);
   $("#demo-banner").hidden = state.platform_supported;
   $("#autostart-wrap").hidden = !state.platform_supported;
   $("#autostart").checked = state.autostart;
@@ -1910,6 +1914,45 @@ $("#add-hotkey").addEventListener("click", () => {
 });
 
 // ---------------------------------------------------------------- settings
+
+// The theme: the server writes a chosen one into the page, so it's right
+// from the first paint; this keeps it in step with the button and other tabs.
+const THEMES = {
+  system: { icon: "themeAuto", label: "Theme: automatic, like your system", next: "light" },
+  light: { icon: "sun", label: "Theme: light", next: "dark" },
+  dark: { icon: "moon", label: "Theme: dark", next: "system" },
+};
+let appliedTheme = document.documentElement.dataset.theme || "system";
+// Clicks whose save hasn't answered: until then a broadcast still carries
+// the old theme, and applying it would flick the page back.
+let themeSaves = 0;
+
+function applyTheme(theme) {
+  const t = THEMES[theme] || THEMES.system;
+  appliedTheme = theme;
+  if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+  else delete document.documentElement.dataset.theme;
+  const btn = $("#theme-btn");
+  btn.dataset.icon = t.icon;
+  btn.setAttribute("aria-label", `${t.label}. Click for ${THEMES[t.next].label.slice(7)}`);
+  btn.title = btn.getAttribute("aria-label");
+  drawIcons(btn);
+  drawWave(); // the waveform is drawn in the theme's colours
+}
+
+$("#theme-btn").addEventListener("click", () => {
+  const next = THEMES[appliedTheme].next;
+  applyTheme(next);
+  themeSaves++;
+  const save = api("PUT", "/api/settings", { theme: next });
+  save.finally(() => themeSaves--).catch(() => {
+    if (!themeSaves && state && state.theme !== appliedTheme) applyTheme(state.theme);
+  });
+  attempt(save);
+});
+// Following the system: redraw the waveform when it switches.
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawWave);
+applyTheme(appliedTheme);
 
 let adminPending = false; // waiting for the UAC prompt to be answered
 let autostartSaving = false;

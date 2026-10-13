@@ -1,7 +1,7 @@
 //! Local web UI + JSON API on 127.0.0.1.
 
 use crate::backend::PLATFORM_SUPPORTED;
-use crate::config::{DeviceRef, Hotkey, SourceKind};
+use crate::config::{DeviceRef, Hotkey, SourceKind, Theme};
 use crate::engine::{ChannelPatch, Engine, MusicControl, MusicPatch, SoundPatch, SoundboardPatch};
 use crate::platform;
 use crate::soundboard::MAX_FILE_BYTES;
@@ -39,15 +39,7 @@ fn ok() -> ApiResult {
 pub fn router(engine: Arc<Engine>, port: u16, quit: Arc<dyn Fn() + Send + Sync>) -> Router {
     let app = App { engine, port, quit };
     Router::new()
-        .route(
-            "/",
-            get(|| async {
-                static_file(
-                    "text/html; charset=utf-8",
-                    include_str!("../web/index.html"),
-                )
-            }),
-        )
+        .route("/", get(index))
         .route(
             "/app.js",
             get(|| async {
@@ -105,6 +97,34 @@ pub fn router(engine: Arc<Engine>, port: u16, quit: Arc<dyn Fn() + Send + Sync>)
         .with_state(app)
 }
 
+/// The page, in the chosen theme from the first paint (a script setting it
+/// later would flash the other one).
+async fn index(State(app): State<App>) -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        themed_page(app.engine.theme()),
+    )
+        .into_response()
+}
+
+fn themed_page(theme: Theme) -> std::borrow::Cow<'static, str> {
+    let page = include_str!("../web/index.html");
+    let theme = match theme {
+        Theme::System => return page.into(),
+        Theme::Light => "light",
+        Theme::Dark => "dark",
+    };
+    page.replacen(
+        "<html lang=\"en\">",
+        &format!("<html lang=\"en\" data-theme=\"{theme}\">"),
+        1,
+    )
+    .into()
+}
+
 fn static_file(content_type: &'static str, body: &'static str) -> Response {
     (
         [
@@ -157,6 +177,7 @@ fn full_state(engine: &Engine) -> serde_json::Value {
     v["autostart_admin"] = json!(admin);
     v["elevated"] = json!(platform::is_elevated());
     v["platform_supported"] = json!(PLATFORM_SUPPORTED);
+    v["theme"] = json!(engine.theme());
     v
 }
 
@@ -401,6 +422,7 @@ struct Settings {
     autostart: Option<bool>,
     /// Start with Windows as administrator (the elevated sign-in task).
     autostart_admin: Option<bool>,
+    theme: Option<Theme>,
 }
 
 async fn set_settings(State(app): State<App>, Json(body): Json<Settings>) -> ApiResult {
@@ -422,6 +444,10 @@ async fn set_settings(State(app): State<App>, Json(body): Json<Settings>) -> Api
         Ok(())
     })
     .await?;
+    // After the autostart change, so a cancelled UAC prompt changes nothing.
+    if let Some(theme) = body.theme {
+        app.engine.set_theme(theme);
+    }
     ok()
 }
 
@@ -509,4 +535,16 @@ async fn stream_updates(mut socket: WebSocket, engine: Arc<Engine>, connection: 
 
 async fn send(socket: &mut WebSocket, value: serde_json::Value) -> Result<(), axum::Error> {
     socket.send(Message::Text(value.to_string().into())).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_page_comes_in_the_chosen_theme() {
+        assert!(themed_page(Theme::System).contains("<html lang=\"en\">"));
+        assert!(themed_page(Theme::Dark).contains("<html lang=\"en\" data-theme=\"dark\">"));
+        assert!(themed_page(Theme::Light).contains("data-theme=\"light\""));
+    }
 }

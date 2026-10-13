@@ -83,7 +83,8 @@ It runs as a small tray app and is controlled from a web page served on
   hides its keys from other apps, so run the mixer as administrator too
   (Start with Windows → as Administrator).
 - **Setup check** and **Help** in the top bar, and an ⓘ next to each
-  section explaining it.
+  section explaining it. The theme follows your system's light or dark
+  setting, or the top bar's theme button picks one.
 - Start with Windows (runs in the background, tray icon only), optionally
   **as Administrator** so hotkeys also work in games that run as
   administrator. That uses a Task Scheduler task with highest privileges,
@@ -232,7 +233,7 @@ executable with `include_str!`, so the release is a single `.exe`.
 | POST | `/api/music/tracks/restore` | Puts every removed track back |
 | POST | `/api/music/browse` | `{"folders":true}`: shows the Windows file picker; returns `{"paths":[…]}` |
 | PUT | `/api/hotkeys` | `[{"keys":"Ctrl+Shift+M","action":"push_to_talk","target":"…"}]`. Actions: `toggle_mute`, `push_to_talk`, `push_to_mute` (target: `master` or a source id), `play_sound` (target: a sound id), `stop_sounds`, `music_play_pause`, `music_next`, `music_previous`. |
-| PUT | `/api/settings` | `{"autostart":true,"autostart_admin":false}`. Changing `autostart_admin` shows a Windows permission prompt and waits for it. |
+| PUT | `/api/settings` | `{"autostart":true,"autostart_admin":false,"theme":"system"}` (`theme`: `"system"`, `"light"` or `"dark"`). Changing `autostart_admin` shows a Windows permission prompt and waits for it. |
 | POST | `/api/quit` | Stops the app. |
 | GET | `/ws` | WebSocket: pushes `state` on change (including `monitor`, Listen's `{state, message}`) and `meters` about 30 times a second (with `playing`, the sounds playing now, each mic's `mic_level` and `mic_gate_open`, and `music_position_ms`). Send `{"type":"listen","on":true}` to monitor the mix; it plays while any connection has it on, and a connection's request ends when it closes. |
 

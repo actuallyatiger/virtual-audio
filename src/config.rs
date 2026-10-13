@@ -1,6 +1,6 @@
 //! Persistent configuration, stored as JSON next to the user's app data.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::path::PathBuf;
 
 pub const DEFAULT_PORT: u16 = 47800;
@@ -24,6 +24,27 @@ pub struct Config {
     /// `Run` registry entry.
     pub autostart_admin: bool,
     pub music: MusicConfig,
+    /// The web UI's colours.
+    #[serde(deserialize_with = "theme_or_system")]
+    pub theme: Theme,
+}
+
+/// A theme this build doesn't know (written by a newer one) falls back to
+/// System instead of making the whole file unreadable.
+fn theme_or_system<'de, D: Deserializer<'de>>(d: D) -> Result<Theme, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(Theme::deserialize(v).unwrap_or_default())
+}
+
+/// The web UI's colours.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Theme {
+    /// Follow the system's light or dark setting.
+    #[default]
+    System,
+    Light,
+    Dark,
 }
 
 /// The music playlist and its settings.
@@ -87,6 +108,7 @@ impl Default for Config {
             hear_sounds_db: 0.0,
             autostart_admin: false,
             music: MusicConfig::default(),
+            theme: Theme::System,
         }
     }
 }
@@ -314,6 +336,17 @@ pub fn db_to_gain(db: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn theme_loads_from_old_new_and_unknown_files() {
+        let old: Config = serde_json::from_str(r#"{"port":1}"#).unwrap();
+        assert_eq!(old.theme, Theme::System);
+        let dark: Config = serde_json::from_str(r#"{"theme":"dark"}"#).unwrap();
+        assert_eq!(dark.theme, Theme::Dark);
+        assert_eq!(serde_json::to_value(&dark).unwrap()["theme"], "dark");
+        let newer: Config = serde_json::from_str(r#"{"port":1,"theme":"sepia"}"#).unwrap();
+        assert_eq!((newer.port, newer.theme), (1, Theme::System));
+    }
 
     #[test]
     fn source_roundtrip() {
