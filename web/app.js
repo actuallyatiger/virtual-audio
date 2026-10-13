@@ -1492,11 +1492,20 @@ function renderMusic() {
   const list = $("#tracks");
   if (signature !== lastTracks) {
     lastTracks = signature;
+    // A removed track's × had focus: keep focus at that place in the list.
+    const focused = document.activeElement?.closest?.("#tracks li");
+    const index = focused ? [...list.children].indexOf(focused) : -1;
     list.replaceChildren(...m.tracks.map((t, i) => {
-      const btn = el("button", { type: "button" }, el("span", { className: "num", textContent: i + 1 }), el("span", { textContent: t }));
+      const btn = el("button", { type: "button", className: "track" }, el("span", { className: "num", textContent: i + 1 }), el("span", { textContent: t }));
       btn.addEventListener("click", () => attempt(api("POST", "/api/music/control", { action: "play", track: i })));
-      return el("li", {}, btn);
+      const remove = el("button", { type: "button", className: "ghost icon remove", "data-icon": "close", title: "Remove from the playlist (the file stays)", "aria-label": `Remove ${t} from the playlist` });
+      remove.addEventListener("click", () => attempt(api("POST", "/api/music/tracks/remove", { track: i, name: t })));
+      return el("li", {}, btn, remove);
     }));
+    if (index >= 0) {
+      const removes = list.querySelectorAll(".remove");
+      (removes[Math.min(index, removes.length - 1)] || $("#music-add")).focus();
+    }
   }
   [...list.children].forEach((li, i) => {
     const on = i === current;
@@ -1514,6 +1523,9 @@ function renderMusic() {
     }
   }
 
+  const restore = $("#music-restore");
+  restore.hidden = !m.removed;
+  restore.textContent = `Restore ${m.removed} removed track${m.removed === 1 ? "" : "s"}`;
   if ($("#music-dialog").open) renderMusicItems();
 }
 
@@ -1574,6 +1586,11 @@ dbButtons.music.addEventListener("click", (e) =>
   editDb($("#hear-music-gain"), e.currentTarget, "Hear music volume", (db) => attempt(api("PATCH", "/api/music", { hear_db: db }))));
 
 // ---- the files and folders dialog
+
+$("#music-restore").addEventListener("click", () => {
+  attempt(api("POST", "/api/music/tracks/restore"));
+  $("#music-path").focus(); // the button hides itself
+});
 
 let lastItems = null; // rebuilt only when the items change, keeping focus
 function renderMusicItems() {

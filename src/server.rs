@@ -92,6 +92,8 @@ pub fn router(engine: Arc<Engine>, port: u16, quit: Arc<dyn Fn() + Send + Sync>)
         .route("/api/music/items", post(add_music))
         .route("/api/music/items/{id}", delete(remove_music))
         .route("/api/music/control", post(music_control))
+        .route("/api/music/tracks/remove", post(remove_track))
+        .route("/api/music/tracks/restore", post(restore_tracks))
         .route("/api/music/browse", post(browse_music))
         .route("/api/sounds/{id}", patch(update_sound).delete(remove_sound))
         .route("/api/sounds/{id}/play", post(play_sound))
@@ -327,6 +329,30 @@ async fn add_music(State(app): State<App>, Json(body): Json<MusicPath>) -> ApiRe
 
 async fn remove_music(State(app): State<App>, Path(id): Path<String>) -> ApiResult {
     blocking(&app, StatusCode::BAD_REQUEST, move |e| e.remove_music(&id)).await?;
+    ok()
+}
+
+#[derive(Deserialize)]
+struct TrackRef {
+    /// Index in the playlist, and its name as the UI showed it.
+    track: usize,
+    name: String,
+}
+
+async fn remove_track(State(app): State<App>, Json(body): Json<TrackRef>) -> ApiResult {
+    blocking(&app, StatusCode::BAD_REQUEST, move |e| {
+        e.remove_track(body.track, &body.name)
+    })
+    .await?;
+    ok()
+}
+
+async fn restore_tracks(State(app): State<App>) -> ApiResult {
+    blocking(&app, StatusCode::BAD_REQUEST, move |e| {
+        e.restore_tracks();
+        Ok(())
+    })
+    .await?;
     ok()
 }
 

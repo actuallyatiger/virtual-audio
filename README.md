@@ -48,7 +48,8 @@ It runs as a small tray app and is controlled from a web page served on
 - **Music**: add folders (searched, with subfolders) or files by path, or
   with the Windows file picker. Tracks stream from disk one after another,
   with play/pause, next/previous, seeking, shuffle and repeat (all or one),
-  and hotkeys for play/pause, next and previous. **Turn the music down while
+  and hotkeys for play/pause, next and previous. A track's × takes it out
+  of the playlist (the file stays). **Turn the music down while
   I talk** ducks it while your mic hears you. Music is its own mixer channel,
   and **Hear music** plays it to you at your own volume.
 - **Hear sounds** (on by default): the soundboard also plays on your Windows
@@ -216,6 +217,8 @@ executable with `include_str!`, so the release is a single `.exe`.
 | DELETE | `/api/music/items/{id}` | |
 | POST | `/api/music/control` | `{"action":"toggle"}`, `pause`, `next`, `previous`, `{"action":"play","track":3}`, `{"action":"seek","position_ms":60000}` |
 | PATCH | `/api/music` | `{"shuffle":true,"repeat":"all","duck":true,"duck_db":-12,"hear":true,"hear_db":-6}` (`repeat`: `off`, `all`, `one`) |
+| POST | `/api/music/tracks/remove` | `{"track":3,"name":"Song"}` (its index and name in the list): takes it out of the playlist, never off the disk |
+| POST | `/api/music/tracks/restore` | Puts every removed track back |
 | POST | `/api/music/browse` | `{"folders":true}`: shows the Windows file picker; returns `{"paths":[…]}` |
 | PUT | `/api/hotkeys` | `[{"keys":"Ctrl+Shift+M","action":"push_to_talk","target":"…"}]`. Actions: `toggle_mute`, `push_to_talk`, `push_to_mute` (target: `master` or a source id), `play_sound` (target: a sound id), `stop_sounds`, `music_play_pause`, `music_next`, `music_previous`. |
 | PUT | `/api/settings` | `{"autostart":true,"autostart_admin":false}`. Changing `autostart_admin` shows a Windows permission prompt and waits for it. |

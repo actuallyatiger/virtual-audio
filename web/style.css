@@ -313,13 +313,19 @@ button.icon.round { width: 40px; height: 40px; border-radius: 50%; }
 .seek .gain { flex: 1; }
 .tracks { list-style: none; margin: 10px 0 0; padding: 0; max-height: 260px; overflow: auto; border-top: 1px solid var(--border); }
 .tracks:empty { display: none; }
-.tracks button {
-  width: 100%; text-align: left; border: none; border-radius: 6px; background: none;
+.tracks li { display: flex; align-items: center; gap: 2px; }
+.tracks .track {
+  flex: 1; min-width: 0; text-align: left; border: none; border-radius: 6px; background: none;
   padding: 5px 8px; display: flex; gap: 10px; font-size: 13px;
 }
-.tracks button:hover { background: var(--panel-2); }
+.tracks .track:hover { background: var(--panel-2); }
+/* Remove shows on hover or focus where there is hover; always on touch. */
+@media (hover: hover) {
+  .tracks .remove { opacity: 0; }
+  .tracks li:hover .remove, .tracks .remove:focus-visible { opacity: 1; }
+}
 .tracks .num { color: var(--muted); min-width: 2.5em; text-align: right; font-variant-numeric: tabular-nums; }
-.tracks .current button { color: var(--accent); font-weight: 600; }
+.tracks .current .track { color: var(--accent); font-weight: 600; }
 .music-items { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 220px; overflow: auto; }
 .music-items li { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .music-items .path { flex: 1; min-width: 0; overflow-wrap: anywhere; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; }

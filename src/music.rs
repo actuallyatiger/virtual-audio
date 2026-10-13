@@ -359,6 +359,14 @@ impl MusicPlayer {
         }
     }
 
+    /// A track's path and name, by its index in the list.
+    pub fn track(&self, track: usize) -> Option<(PathBuf, String)> {
+        let s = self.state.lock().unwrap();
+        s.tracks
+            .get(track)
+            .map(|t| (t.path.clone(), t.name.clone()))
+    }
+
     /// Where playback is in the current track.
     pub fn position_ms(&self) -> u64 {
         let start = self.state.lock().unwrap().start_ms;
