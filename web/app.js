@@ -157,6 +157,7 @@ function connect() {
 function render(next) {
   state = next;
   if (!themeSaves && state.theme !== appliedTheme) applyTheme(state.theme);
+  $("#help-version").textContent = `Virtual Audio Mixer ${state.version}`;
   $("#demo-banner").hidden = state.platform_supported;
   $("#autostart-wrap").hidden = !state.platform_supported;
   $("#autostart").checked = state.autostart;
@@ -693,6 +694,13 @@ function setupChecks() {
   if (state.hear_status.state === "error") add("warn", "Hear sounds can't play", state.hear_status.message, { help: "help-trouble" });
   if (state.monitor.state === "error") add("warn", "Listen can't play", state.monitor.message, { help: "help-trouble" });
   if (state.music.error) add("warn", "A music track couldn't be played", state.music.error, { help: "help-music" });
+  const copy = state.admin_copy_version;
+  if (state.autostart_admin && state.admin_copy_outdated) {
+    add("warn", "The administrator copy is out of date", `Start with Windows → as Administrator starts the copy in Program Files, which is ${copy === "unknown" ? "an older version" : `version ${copy}`}; this is ${state.version}. Updating it asks Windows for permission.`, {
+      fix: { label: "Update it", run: () => saveAutostart({ autostart: true, autostart_admin: true }) },
+      help: "help-hotkeys",
+    });
+  }
   return checks;
 }
 
@@ -1960,11 +1968,13 @@ let autostartSaving = false;
 /** Saves Start with Windows settings. Changing "as administrator" (or
  * turning autostart off while it's on) makes Windows ask for permission,
  * and the request waits until that's answered. */
+// `input` is the checkbox that made the change (none from Setup check),
+// put back if it fails.
 async function saveAutostart(body, input) {
   // One change at a time: an administrator change waits for the Windows
   // prompt. The checkboxes stay enabled (disabling them would drop focus).
   if (autostartSaving) {
-    input.checked = !input.checked;
+    if (input) input.checked = !input.checked;
     return;
   }
   autostartSaving = true;
@@ -1977,7 +1987,7 @@ async function saveAutostart(body, input) {
   try {
     await api("PUT", "/api/settings", body);
   } catch (err) {
-    input.checked = !input.checked;
+    if (input) input.checked = !input.checked;
     toast(err.message);
   } finally {
     autostartSaving = false;

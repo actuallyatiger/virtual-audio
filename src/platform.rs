@@ -104,7 +104,9 @@ mod imp {
         SEE_MASK_NO_CONSOLE, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
         SHGetKnownFolderPath, ShellExecuteExW, ShellExecuteW,
     };
-    use windows::Win32::UI::WindowsAndMessaging::{SW_HIDE, SW_SHOWNORMAL};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        IDYES, MB_ICONQUESTION, MB_SETFOREGROUND, MB_YESNO, MessageBoxW, SW_HIDE, SW_SHOWNORMAL,
+    };
     use windows::core::{GUID, HSTRING, PCWSTR, PWSTR, w};
 
     /// Hides the console window schtasks.exe would otherwise flash.
@@ -149,6 +151,19 @@ mod imp {
             }
         }
         Ok(())
+    }
+
+    /// Asks a yes/no question in a Windows message box.
+    pub fn ask(question: &str) -> bool {
+        let answer = unsafe {
+            MessageBoxW(
+                None,
+                &HSTRING::from(question),
+                w!("Virtual Audio Mixer"),
+                MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND,
+            )
+        };
+        answer == IDYES
     }
 
     /// Opens a URL or file with its default app. An elevated mixer hands
@@ -502,6 +517,25 @@ mod imp {
         Ok(dest)
     }
 
+    /// Records which version the installed copy is (this one, which just
+    /// installed it), so a newer mixer can tell it's out of date.
+    const VERSION_FILE: &str = "version.txt";
+
+    /// The version of the copy that starts at sign-in as administrator, if
+    /// there is one ("unknown" for a copy installed before versions were
+    /// recorded).
+    pub fn admin_copy_version() -> Option<String> {
+        let dir = install_dir().ok()?;
+        if !dir.join("virtual-audio.exe").exists() {
+            return None;
+        }
+        Some(
+            std::fs::read_to_string(dir.join(VERSION_FILE))
+                .map(|v| v.trim().to_owned())
+                .unwrap_or_else(|_| "unknown".into()),
+        )
+    }
+
     /// Deletes a file now, or at the next restart if it's running.
     fn remove(path: &Path) {
         if path.exists() && std::fs::remove_file(path).is_err() {
@@ -530,13 +564,14 @@ mod imp {
             {
                 return Err(failure(&out));
             }
-            for file in ["virtual-audio.exe", "virtual-audio.old.exe"] {
+            for file in ["virtual-audio.exe", "virtual-audio.old.exe", VERSION_FILE] {
                 remove(&dir.join(file));
             }
             return Ok(());
         }
         std::fs::create_dir_all(&dir).context("creating the Program Files folder")?;
         let exe = install(&dir)?;
+        std::fs::write(dir.join(VERSION_FILE), crate::VERSION).context("recording the version")?;
         let xml = super::admin_task_xml(&exe.display().to_string(), user);
         // schtasks wants the definition as UTF-16 with a byte order mark. It
         // goes in the install folder, which only administrators can change.
@@ -575,6 +610,10 @@ mod imp {
         false
     }
 
+    pub fn admin_copy_version() -> Option<String> {
+        None
+    }
+
     pub fn browse(_folders: bool) -> anyhow::Result<Vec<String>> {
         anyhow::bail!("browsing is only available on Windows: type or paste the path instead")
     }
@@ -585,6 +624,10 @@ mod imp {
 
     pub fn admin_task_helper(_enabled: bool, _user: &str) -> anyhow::Result<()> {
         anyhow::bail!("only available on Windows")
+    }
+
+    pub fn ask(_question: &str) -> bool {
+        false
     }
 
     pub fn shell_open(target: &str) {

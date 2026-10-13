@@ -19,11 +19,23 @@ pub fn quit_handle() -> impl Fn() + Send + Sync + 'static {
 /// Shows the tray icon and pumps messages until WM_QUIT. Must run on the
 /// thread that called [`quit_handle`].
 pub fn run(url: String, quit: impl Fn() + Send + Sync + 'static) -> anyhow::Result<()> {
+    let title = MenuItem::new(
+        format!("Virtual Audio Mixer {}", crate::VERSION),
+        false,
+        None,
+    );
     let open = MenuItem::new("Open mixer", true, None);
     let log = MenuItem::new("Open log file", true, None);
     let exit = MenuItem::new("Quit", true, None);
     let menu = Menu::new();
-    menu.append_items(&[&open, &log, &PredefinedMenuItem::separator(), &exit])?;
+    menu.append_items(&[
+        &title,
+        &PredefinedMenuItem::separator(),
+        &open,
+        &log,
+        &PredefinedMenuItem::separator(),
+        &exit,
+    ])?;
     let _tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_menu_on_left_click(false)

@@ -16,7 +16,60 @@ mod soundboard;
 mod tray;
 
 use config::{Channel, Config, DeviceRef, SourceConfig, SourceKind};
+
+/// This build's version (from Cargo.toml, which releases bump).
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 use std::sync::Arc;
+
+/// Whether version `a` is older than `b`. Copies from before versions
+/// ("unknown") count as older.
+pub fn is_older(a: &str, b: &str) -> bool {
+    let parse = |v: &str| -> Option<Vec<u64>> { v.split('.').map(|n| n.parse().ok()).collect() };
+    match (parse(a), parse(b)) {
+        (Some(a), Some(b)) => a < b,
+        (None, Some(_)) => true,
+        _ => false,
+    }
+}
+
+/// The version of the copy running on `port`, asked over its API. `None` if
+/// nothing answers like the mixer.
+fn running_version(port: u16) -> Option<String> {
+    use std::io::{Read, Write};
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let timeout = std::time::Duration::from_secs(2);
+    let mut stream = std::net::TcpStream::connect_timeout(&addr, timeout).ok()?;
+    stream.set_read_timeout(Some(timeout)).ok()?;
+    write!(
+        stream,
+        "GET /api/state HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    )
+    .ok()?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response).ok()?;
+    let body = &response[response.find("\r\n\r\n")? + 4..];
+    let state: serde_json::Value = serde_json::from_str(body).ok()?;
+    state.get("platform_supported")?;
+    Some(state["version"].as_str().unwrap_or("unknown").to_owned())
+}
+
+/// Asks the copy running on `port` to quit, and takes the port once it has.
+fn take_over(port: u16) -> anyhow::Result<std::net::TcpListener> {
+    use std::io::Write;
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port))?;
+    write!(
+        stream,
+        "POST /api/quit HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    )?;
+    drop(stream);
+    for _ in 0..100 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if let Ok(listener) = std::net::TcpListener::bind(("127.0.0.1", port)) {
+            return Ok(listener);
+        }
+    }
+    anyhow::bail!("the running copy didn't close")
+}
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -47,19 +100,31 @@ fn main() -> anyhow::Result<()> {
     // set up so a second launch doesn't rotate the running copy's log.
     let listener = match std::net::TcpListener::bind(("127.0.0.1", port)) {
         Ok(l) => l,
-        Err(_) => {
-            if !background {
-                platform::shell_open(&url);
+        Err(_) if background => return Ok(()),
+        Err(_) => match running_version(port) {
+            // An older copy (often the administrator one starting at sign-in)
+            // would otherwise keep running and hide this one.
+            Some(running)
+                if is_older(&running, VERSION)
+                    && platform::ask(&format!(
+                        "An older Virtual Audio Mixer ({running}) is running. \
+                         Close it and start this version ({VERSION})?"
+                    )) =>
+            {
+                take_over(port)?
             }
-            return Ok(());
-        }
+            _ => {
+                platform::shell_open(&url);
+                return Ok(());
+            }
+        },
     };
     listener.set_nonblocking(true)?;
 
     init_logging(verbose);
     tracing::info!(
         "Virtual Audio Mixer {} starting, args: {:?}",
-        env!("CARGO_PKG_VERSION"),
+        VERSION,
         std::env::args().skip(1).collect::<Vec<_>>()
     );
     let (mut config, first_run) = match loaded {
@@ -215,4 +280,18 @@ fn init_logging(verbose: bool) {
         tracing::error!("panic in thread {:?}: {info}", thread.name().unwrap_or("?"));
         default_hook(info);
     }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn versions_compare_by_number() {
+        assert!(is_older("0.2.0", "0.10.0"));
+        assert!(is_older("0.9.9", "1.0.0"));
+        assert!(!is_older("0.3.0", "0.2.0"));
+        assert!(!is_older("0.2.0", "0.2.0"));
+        assert!(is_older("unknown", "0.1.0"));
+    }
 }

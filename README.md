@@ -92,8 +92,9 @@ It runs as a small tray app and is controlled from a web page served on
   task starts a copy of the mixer in `C:\Program Files\Virtual Audio Mixer`,
   where only administrators can change it: starting the downloaded file
   as administrator would let any program that can replace it run as
-  administrator too. After updating the mixer, turn the option off and on
-  again to update that copy. It needs your account to be an administrator.
+  administrator too. When you open a newer version, it offers to close
+  the older one that's running, and **Setup check** then offers to update
+  that copy. It needs your account to be an administrator.
 - Settings are saved to `%APPDATA%\VirtualAudioMixer\config.json`.
 
 ## Requirements
@@ -108,9 +109,11 @@ It runs as a small tray app and is controlled from a web page served on
 ## Setup
 
 1. Install VB-Audio Virtual Cable and reboot.
-2. Run `virtual-audio.exe`. The mixer opens in your browser, and a tray icon
-   appears. Left-click it to reopen the page; right-click it for **Open
-   mixer**, **Open log file** and **Quit**.
+2. Download `virtual-audio.exe` from the
+   [latest release](https://github.com/actuallyatiger/virtual-audio/releases/latest)
+   and run it. The mixer opens in your browser, and a tray icon appears.
+   Left-click it to reopen the page; right-click it for **Open mixer**,
+   **Open log file** and **Quit** (its first line shows the version).
 3. Check that **Output** is **CABLE Input (VB-Audio Virtual Cable)**. It is
    selected automatically on first run if the cable is installed.
 4. Your default microphone is added automatically. Click **+ Add source** to
@@ -163,6 +166,25 @@ CI builds the Windows release `.exe` for pull requests and pushes to `main`.
 Download it from the workflow run's artifacts. Building needs Rust 1.88 or
 newer.
 
+### Releases
+
+Versions follow [SemVer](https://semver.org) and come from the
+[Conventional Commits](https://www.conventionalcommits.org) on `main`, via
+[release-please](https://github.com/googleapis/release-please)
+(`.github/workflows/release.yml`):
+
+1. Every push to `main` updates a release PR that bumps the version in
+   `Cargo.toml` and adds the new `feat`, `fix` and other changes to
+   `CHANGELOG.md`. Before 1.0, a `feat` raises the minor version (0.1 →
+   0.2) and a `fix` the patch.
+2. Merging that PR tags the version (`v0.2.0`), publishes a GitHub Release
+   with the changelog, and attaches the Windows `virtual-audio.exe`.
+
+The app shows its version in the tray menu and at the bottom of Help, and
+`GET /api/state` reports it as `version`. For release-please to open its PR,
+the repository's **Settings → Actions → General → Workflow permissions** must
+allow GitHub Actions to create pull requests.
+
 On Linux and macOS the same binary builds with a **demo backend**: fake
 devices and apps that generate tones. You can develop and test the engine and
 web UI anywhere with `cargo run`, then open `http://127.0.0.1:47800`.
@@ -207,7 +229,7 @@ executable with `include_str!`, so the release is a single `.exe`.
 
 | Method | Path | Body |
 | --- | --- | --- |
-| GET | `/api/state` | |
+| GET | `/api/state` | Everything the UI shows, including `version`, `admin_copy_version` (the Program Files copy's version if there is one, `"unknown"` if it predates versions) and `admin_copy_outdated` |
 | GET | `/api/devices` | |
 | GET | `/api/apps` | |
 | POST | `/api/sources` | `{"kind":"app","exe":"chrome.exe"}` or `{"kind":"device","device":null}`, plus an optional `"name"`; or `{"kind":"soundboard"}` / `{"kind":"music"}` (one of each) |
