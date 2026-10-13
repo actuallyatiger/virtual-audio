@@ -68,7 +68,7 @@
           <li>Each card is a source, mixed into <b>Master</b>, which goes to the output.</li>
           <li>Drag a volume slider, or click its dB value to type one. Double-click a slider to reset it to 0 dB.</li>
           <li>Drag a card by its handle, or focus the handle and use the arrow keys, to reorder.</li>
-          <li>Microphone cards have a ⚙ for noise suppression and the noise gate.</li>
+          <li>Microphone cards have a ⚙ for noise suppression, automatic level and the noise gate.</li>
           <li><b>Listen</b> on Master plays the final mix on your Windows default output, so you can check what others hear (with about 100 ms delay).</li>
         </ul>
         <button type="button" class="link" data-help="help-sources">More in Help</button>
@@ -269,6 +269,10 @@
         <p class="hint small">Removes steady background noise (fans, hum, keyboard clatter) from your voice.</p>
       </div>
       <div>
+        <label class="check"><input type="checkbox" id="mic-auto-level"> Automatic level</label>
+        <p class="hint small">Keeps your voice at a steady speaking level, so you're not too quiet or too loud. <span id="mic-auto-level-now"></span></p>
+      </div>
+      <div>
         <label class="check"><input type="checkbox" id="mic-gate"> Noise gate</label>
         <p class="hint small">Silences your mic while you aren't talking.</p>
       </div>
@@ -371,7 +375,7 @@
             <li><b>Input Device</b>: CABLE Output (VB-Audio Virtual Cable).</li>
             <li><b>Input Sensitivity</b>: turn off <i>Automatically determine input sensitivity</i> and drag the slider all the way left. Its automatic gate listens for speech, so it cuts out sounds and music while you aren't talking.</li>
             <li><b>Noise Suppression</b>: None.</li>
-            <li><b>Echo Cancellation</b> and <b>Automatic Gain Control</b>: off.</li>
+            <li><b>Echo Cancellation</b> and <b>Automatic Gain Control</b>: off. If that leaves you quiet, turn on <b>Automatic level</b> for your mic instead (see <a href="#help-mic">Mic processing</a>).</li>
           </ul>
           <h4>OBS</h4>
           <p>Add an <b>Audio Input Capture</b> source and choose CABLE Output. If OBS also captures your mic directly, remove that source so your voice isn't recorded twice.</p>
@@ -394,6 +398,7 @@
           <p>Open it with the ⚙ on a microphone's card. It only affects that mic, never apps or the soundboard.</p>
           <ul>
             <li><b>Noise suppression</b> uses a small neural network (RNNoise) to remove steady background noise such as fans, hum and keyboard clatter.</li>
+            <li><b>Automatic level</b> keeps your voice at a steady speaking level, as Discord's <i>Automatic Gain Control</i> does. It learns how loud you speak and turns your mic up or down slowly, and holds still between words, so background noise isn't raised in the pauses. It shows how much it's turning you up or down, and picks up there next time. Use it if people say you're quiet, especially with Discord's processing off.</li>
             <li>The <b>noise gate</b> silences your mic while you aren't talking. <i>Automatic</i> opens when it hears speech that's louder than the room's background noise. <i>Above a level I set</i> opens when the meter passes your line: set it just above where the meter sits while you're quiet. Either way it stays open for 200 ms after you stop, so word endings aren't cut.</li>
             <li><b>Extra strength</b> (automatic only) makes the gate stricter, so sudden sounds such as a glass put down or a finger snap don't open it. To do that without cutting off the start of your words it listens 30 ms ahead, which adds 30 ms delay to your mic. <b>Keep everything else in time</b> adds the same 30 ms delay to every other source, so music in the mix stays in time with your voice (for singing along, say).</li>
           </ul>
@@ -439,6 +444,7 @@
             <li><b>Listen or Hear sounds is refused</b>: they play on the Windows default output, which mustn't be the device the mix goes to.</li>
             <li><b>Hotkeys don't work in a game</b>: the game probably runs as administrator. See <a href="#help-hotkeys">Hotkeys</a>.</li>
             <li><b>The gate cuts out quiet words</b>: switch it to <i>Above a level I set</i> and lower the line.</li>
+            <li><b>Others say I'm quiet</b>: turn on <b>Automatic level</b> in your mic's ⚙ (see <a href="#help-mic">Mic processing</a>). Voice chat apps' own gain control, which normally turns a quiet mic up, is off with the settings above. Also ask them to check your volume on their side (in Discord, right-click your name → <i>User Volume</i>), which they may have turned down for loud sounds.</li>
           </ul>
           <p>The app keeps its files in <code>%APPDATA%\VirtualAudioMixer</code>: <code>config.json</code> (your settings), <code>sounds\</code>, and <code>log.txt</code> (this run) and <code>log.previous.txt</code> (the run before), which the tray menu's <b>Open log file</b> opens. A <code>config.json</code> that can't be read is moved aside as <code>config.&lt;time&gt;.json.bad</code>.</p>
         </section>

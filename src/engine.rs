@@ -194,6 +194,7 @@ pub struct ChannelPatch {
     pub gate_db: Option<f32>,
     pub extra_strength: Option<bool>,
     pub keep_in_time: Option<bool>,
+    pub auto_level: Option<bool>,
 }
 
 /// The music player for the UI: settings, list and what's playing.
@@ -329,6 +330,9 @@ pub struct ChannelMeter {
     /// setup check's "is the mic picking anything up").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mic_input: Option<f32>,
+    /// Device sources with automatic level on: its adjustment now (dB).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mic_auto_level_db: Option<f32>,
 }
 
 impl Engine {
@@ -458,6 +462,7 @@ impl Engine {
                 w.stop();
             }
         }
+        note_auto_levels(&mut inner, 0.0);
         if let Err(e) = inner.config.save() {
             tracing::error!("saving config: {e}");
         }
@@ -548,6 +553,8 @@ impl Engine {
                         mic_level: mic.then(|| rt.processing.level()),
                         mic_gate_open: mic.then(|| rt.processing.gate_open()),
                         mic_input: mic.then(|| rt.processing.input_level()),
+                        mic_auto_level_db: (mic && rt.processing.auto_level())
+                            .then(|| rt.processing.level_db()),
                     },
                 )
             })
@@ -560,6 +567,7 @@ impl Engine {
                 mic_level: None,
                 mic_gate_open: None,
                 mic_input: None,
+                mic_auto_level_db: None,
             },
         );
         out
@@ -660,11 +668,12 @@ impl Engine {
             || patch.gate_mode.is_some()
             || patch.gate_db.is_some()
             || patch.extra_strength.is_some()
-            || patch.keep_in_time.is_some();
+            || patch.keep_in_time.is_some()
+            || patch.auto_level.is_some();
         let mut inner = self.inner.lock().unwrap();
         let (channel, ctrl) = if id == MASTER {
             if processing_patch {
-                bail!("noise suppression and the noise gate are only for microphones");
+                bail!("mic processing is only for microphones");
             }
             (&mut inner.config.master, self.master.clone())
         } else {
@@ -680,7 +689,7 @@ impl Engine {
                 .find(|s| s.id == id)
                 .ok_or_else(|| anyhow!("no such source"))?;
             if processing_patch && !matches!(src.kind, SourceKind::Device { .. }) {
-                bail!("noise suppression and the noise gate are only for microphones");
+                bail!("mic processing is only for microphones");
             }
             if let Some(name) = patch.name.filter(|n| !n.trim().is_empty()) {
                 src.name = name.trim().to_owned();
@@ -707,6 +716,10 @@ impl Engine {
             }
             if let Some(on) = patch.keep_in_time {
                 src.processing.keep_in_time = on;
+            }
+            if let Some(on) = patch.auto_level {
+                src.processing.auto_level = on;
+                processing.set_auto_level(on);
             }
             (&mut src.channel, ctrl)
         };
@@ -1678,7 +1691,10 @@ impl Engine {
         }
 
         // 4. Save without the lock. On failure mark dirty again so the next
-        // tick retries, and log each distinct error once.
+        // tick retries, and log each distinct error once. Automatic level is
+        // saved as it settles, not just on Quit, as signing out of Windows
+        // ends the mixer without one.
+        note_auto_levels(&mut inner, 0.5);
         let to_save = std::mem::take(&mut inner.dirty).then(|| inner.config.clone());
         drop(inner);
         if let Some(config) = to_save {
@@ -1757,6 +1773,8 @@ impl SourceRuntime {
                     p.gate_db,
                 );
                 control.set_extra_strength(p.extra_strength);
+                control.set_auto_level(p.auto_level);
+                control.set_level_db(p.auto_level_db);
                 Arc::new(control)
             },
             status: Arc::new(Mutex::new(Status::new("waiting", "Starting…"))),
@@ -1774,6 +1792,28 @@ impl SourceRuntime {
 fn feeds_back(capture: &str, output: &str) -> bool {
     let capture = capture.to_lowercase();
     capture.contains("output") && capture.replacen("output", "input", 1) == output.to_lowercase()
+}
+
+/// Copies where each mic's automatic level has got to into the config, to
+/// start from next time, marking it for saving if any moved more than
+/// `min_change` dB.
+fn note_auto_levels(inner: &mut Inner, min_change: f32) {
+    let Inner {
+        config,
+        sources,
+        dirty,
+        ..
+    } = inner;
+    for src in &mut config.sources {
+        let Some(rt) = sources.get(&src.id) else {
+            continue;
+        };
+        let db = rt.processing.level_db();
+        if (db - src.processing.auto_level_db).abs() > min_change {
+            src.processing.auto_level_db = db;
+            *dirty = true;
+        }
+    }
 }
 
 /// Trims shorter than this are refused, so a sound can't vanish.
@@ -2569,6 +2609,40 @@ mod tests {
         let err = engine.play_sound("missing").unwrap_err();
         assert!(err.to_string().contains("nope.wav"), "{err}");
         engine.shutdown();
+    }
+
+    #[test]
+    fn automatic_level_is_shown_and_kept_for_next_time() {
+        let engine = engine("cable");
+        let mic = engine
+            .add_source(None, SourceKind::Device { device: None })
+            .unwrap();
+        assert_eq!(engine.meters()[&mic].mic_auto_level_db, None, "off");
+        let on = ChannelPatch {
+            auto_level: Some(true),
+            ..Default::default()
+        };
+        engine.update_channel(&mic, on).unwrap();
+        assert_eq!(engine.meters()[&mic].mic_auto_level_db, Some(0.0));
+        assert_eq!(engine.meters()["a"].mic_auto_level_db, None, "mics only");
+        // Where it settled is saved as it goes (signing out of Windows ends
+        // the mixer without a Quit), and a new engine starts there.
+        engine.inner.lock().unwrap().sources[&mic]
+            .processing
+            .set_level_db(9.5);
+        engine.supervise();
+        let inner = engine.inner.lock().unwrap();
+        let src = inner.config.sources.iter().find(|s| s.id == mic).unwrap();
+        assert_eq!(src.processing.auto_level_db, 9.5);
+        drop(inner);
+        engine.shutdown();
+        let config = engine.inner.lock().unwrap().config.clone();
+        let src = config.sources.iter().find(|s| s.id == mic).unwrap();
+        assert!(src.processing.auto_level);
+        assert_eq!(src.processing.auto_level_db, 9.5);
+        let again = Engine::new(Box::new(TestBackend), config);
+        assert_eq!(again.meters()[&mic].mic_auto_level_db, Some(9.5));
+        again.shutdown();
     }
 
     #[test]
