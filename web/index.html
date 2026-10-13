@@ -98,7 +98,7 @@
       <div class="hear-row" id="hear-row" hidden>
         <label for="hear-gain">Your volume</label>
         <input type="range" id="hear-gain" class="gain" min="-60" max="12" step="0.5">
-        <span id="hear-gain-value" class="gain-label"></span>
+        <button type="button" id="hear-gain-value" class="gain-value" title="Click to type a value"></button>
         <span id="hear-status" class="status"></span>
       </div>
       <p class="hint" id="sb-hint"></p>
@@ -127,7 +127,7 @@
       <div class="hear-row" id="hear-music-row" hidden>
         <label for="hear-music-gain">Your volume</label>
         <input type="range" id="hear-music-gain" class="gain" min="-60" max="12" step="0.5">
-        <span id="hear-music-value" class="gain-label"></span>
+        <button type="button" id="hear-music-value" class="gain-value" title="Click to type a value"></button>
       </div>
       <p class="hint" id="music-hint"></p>
       <div class="player" id="player" hidden>
@@ -231,7 +231,7 @@
       <label class="field" for="sound-gain">Volume</label>
       <div class="gain-row">
         <input type="range" id="sound-gain" class="gain" min="-60" max="12" step="0.5">
-        <span id="sound-gain-value" class="gain-label"></span>
+        <button type="button" id="sound-gain-value" class="gain-value" title="Click to type a value"></button>
       </div>
       <div class="trim" id="trim">
         <div class="trim-head">
