@@ -277,6 +277,14 @@
           <label class="check"><input type="radio" name="gate-mode" value="auto"> Automatically, when it hears your voice</label>
           <label class="check"><input type="radio" name="gate-mode" value="manual"> Above a level I set</label>
         </fieldset>
+        <div class="gate-extra" id="mic-extra">
+          <label class="check"><input type="checkbox" id="mic-extra-strength"> Extra strength</label>
+          <p class="hint small">Stricter about what opens the gate. Adds 30 ms delay.</p>
+          <div class="gate-keep" id="mic-keep">
+            <label class="check"><input type="checkbox" id="mic-keep-in-time"> Keep everything else in time</label>
+            <p class="hint small">Adds the same 30 ms delay to the other sources, so music in the mix stays in time with your voice.</p>
+          </div>
+        </div>
         <div class="gate-controls">
           <div class="meter mic-meter" aria-hidden="true"><div class="meter-fill"></div><div class="threshold-mark" id="mic-threshold-mark"></div></div>
           <span class="gate-state" id="mic-gate-state"></span>
@@ -386,8 +394,8 @@
           <ul>
             <li><b>Noise suppression</b> uses a small neural network (RNNoise) to remove steady background noise such as fans, hum and keyboard clatter.</li>
             <li>The <b>noise gate</b> silences your mic while you aren't talking. <i>Automatic</i> opens when it hears speech that's louder than the room's background noise. <i>Above a level I set</i> opens when the meter passes your line: set it just above where the meter sits while you're quiet. Either way it stays open for 200 ms after you stop, so word endings aren't cut.</li>
+            <li><b>Extra strength</b> (automatic only) makes the gate stricter, so sudden sounds such as a glass put down or a finger snap don't open it. To do that without cutting off the start of your words it listens 30 ms ahead, which adds 30 ms delay to your mic. <b>Keep everything else in time</b> adds the same 30 ms delay to every other source, so music in the mix stays in time with your voice (for singing along, say).</li>
           </ul>
-          <p>Either one adds up to 10 ms of delay and makes the mic mono.</p>
         </section>
 
         <section id="help-soundboard">

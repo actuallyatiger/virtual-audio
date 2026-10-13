@@ -135,6 +135,14 @@ pub struct Processing {
     pub gate_mode: GateMode,
     /// Manual mode: the gate opens when the level reaches this (dBFS).
     pub gate_db: f32,
+    /// Automatic mode: stricter about what opens the gate (it ignores knocks
+    /// and clicks), looking 30 ms ahead, which delays the mic that much.
+    /// Only takes effect with the gate on in automatic mode.
+    pub extra_strength: bool,
+    /// With extra strength: delay the other sources by the same 30 ms, so
+    /// they stay in time with the mic (e.g. singing along to music). Noise
+    /// suppression's own 10 ms is matched regardless.
+    pub keep_in_time: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -154,6 +162,8 @@ impl Default for Processing {
             noise_gate: false,
             gate_mode: GateMode::Auto,
             gate_db: -45.0,
+            extra_strength: false,
+            keep_in_time: false,
         }
     }
 }

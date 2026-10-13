@@ -4,6 +4,7 @@
 //! own single-producer/single-consumer ring buffer. The render thread calls
 //! [`Mixer::process`] whenever the output device wants more audio.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -90,6 +91,20 @@ struct Input {
     primed: bool,
     /// Smoothed number of buffered frames, for drift correction.
     fill: f32,
+    /// Extra frames kept buffered, delaying this source to stay in time
+    /// with a later one (a mic whose noise gate looks ahead).
+    delay: usize,
+    /// The delay changed: fade out, then start again at the new one.
+    restart: bool,
+    /// Restarting for a new delay: start from exactly the new level.
+    trim: bool,
+}
+
+impl Input {
+    /// The buffer level drift correction steers towards.
+    fn target(&self) -> usize {
+        TARGET_FRAMES + self.delay
+    }
 }
 
 pub struct Mixer {
@@ -99,6 +114,8 @@ pub struct Mixer {
     scratch: Vec<f32>,
     /// Holds a source's raw frames before they are stretched to fit.
     read_buf: Vec<f32>,
+    /// Delays by source id, kept for sources that are (re)added.
+    pub(crate) delays: HashMap<String, usize>,
 }
 
 /// Creates the ring buffer a capture thread writes into.
@@ -132,6 +149,7 @@ impl Mixer {
             master_gain,
             scratch: Vec::with_capacity(MAX_BLOCK_FRAMES * CHANNELS),
             read_buf: Vec::with_capacity((MAX_BLOCK_FRAMES + 1) * CHANNELS),
+            delays: HashMap::new(),
         }
     }
 
@@ -146,7 +164,28 @@ impl Mixer {
             current_gain,
             primed: false,
             fill: 0.0,
+            delay: self.delays.get(id).copied().unwrap_or(0),
+            restart: false,
+            trim: false,
         });
+    }
+
+    /// Delays a source by `frames` (on top of the usual buffering). A change
+    /// fades the source out and back in.
+    pub fn set_delay(&mut self, id: &str, frames: usize) {
+        if frames == 0 {
+            self.delays.remove(id);
+        } else {
+            self.delays.insert(id.to_owned(), frames);
+        }
+        for input in self.inputs.iter_mut().filter(|i| i.id == id) {
+            if input.delay != frames {
+                // Waiting to prime already: start at exactly the new level.
+                input.trim |= !input.primed && frames < input.delay;
+                input.delay = frames;
+                input.restart = input.primed;
+            }
+        }
     }
 
     pub fn remove_input(&mut self, id: &str) {
@@ -179,22 +218,31 @@ impl Mixer {
         } = self;
         for input in inputs.iter_mut() {
             let mut avail = input.rx.slots() / CHANNELS;
+            let target_frames = input.target();
             if !input.primed {
-                if avail < TARGET_FRAMES {
+                if avail < target_frames {
                     input.ctrl.update_peak(0.0, decay);
                     continue;
                 }
                 input.primed = true;
+                if std::mem::take(&mut input.trim) {
+                    // A shorter delay than before: drop the excess.
+                    let skip = (avail - target_frames) * CHANNELS;
+                    if let Ok(chunk) = input.rx.read_chunk(skip) {
+                        chunk.commit_all();
+                    }
+                    avail = target_frames;
+                }
                 input.fill = avail as f32;
                 // Fade in from silence rather than starting mid-waveform.
                 input.current_gain = 0.0;
             }
-            if avail > MAX_FRAMES {
-                let skip = (avail - TARGET_FRAMES) * CHANNELS;
+            if avail > target_frames + (MAX_FRAMES - TARGET_FRAMES) {
+                let skip = (avail - target_frames) * CHANNELS;
                 if let Ok(chunk) = input.rx.read_chunk(skip) {
                     chunk.commit_all();
                 }
-                avail = TARGET_FRAMES;
+                avail = target_frames;
                 input.fill = avail as f32;
             }
 
@@ -205,9 +253,9 @@ impl Mixer {
             input.fill += (avail as f32 - input.fill) * FILL_SMOOTHING;
             let want = if frames < 64 {
                 frames
-            } else if input.fill > TARGET_FRAMES as f32 + DRIFT_DEADBAND {
+            } else if input.fill > target_frames as f32 + DRIFT_DEADBAND {
                 frames + 1
-            } else if input.fill < TARGET_FRAMES as f32 - DRIFT_DEADBAND {
+            } else if input.fill < target_frames as f32 - DRIFT_DEADBAND {
                 frames - 1
             } else {
                 frames
@@ -224,6 +272,14 @@ impl Mixer {
             let buf = &mut scratch[..out.len()];
             let n = if got == want * CHANNELS {
                 stretch(read_buf, buf);
+                if input.restart {
+                    // A new delay: fade out, and wait until the buffer is at
+                    // the new level (a longer delay) or trim it (shorter).
+                    fade_out_tail(buf);
+                    input.restart = false;
+                    input.primed = false;
+                    input.trim = true;
+                }
                 out.len()
             } else {
                 // Underrun: play what we have, fade it out instead of cutting
@@ -233,6 +289,8 @@ impl Mixer {
                 buf[n..].fill(0.0);
                 fade_out_tail(&mut buf[..n]);
                 input.primed = false;
+                // It re-primes at the current target anyway.
+                input.restart = false;
                 n
             };
 
@@ -417,6 +475,79 @@ mod tests {
         let mut out = vec![0.0; 480 * CHANNELS];
         mixer.process(&mut out);
         assert_eq!(tx.slots(), RING_SAMPLES - (TARGET_FRAMES - 480) * CHANNELS);
+    }
+
+    #[test]
+    fn delay_keeps_more_buffered_and_back() {
+        let master = Arc::new(ChannelControl::new(1.0, false));
+        let mut mixer = Mixer::new(master);
+        let (mut tx, rx) = source_ring();
+        mixer.set_input("a", Arc::new(ChannelControl::new(1.0, false)), rx);
+        let mut out = vec![0.0; 480 * CHANNELS];
+        let buffered = |tx: &rtrb::Producer<f32>| (RING_SAMPLES - tx.slots()) / CHANNELS;
+        let mut run = |mixer: &mut Mixer, tx: &mut rtrb::Producer<f32>, blocks: usize| {
+            let mut silent = 0;
+            for _ in 0..blocks {
+                feed(tx, 480, 0.1);
+                mixer.process(&mut out);
+                silent += out.iter().all(|&s| s == 0.0) as usize;
+            }
+            silent
+        };
+        run(&mut mixer, &mut tx, 10);
+        assert!(buffered(&tx).abs_diff(TARGET_FRAMES) <= 480);
+
+        // 30 ms more: a 30 ms gap while it builds up, then that much more.
+        mixer.set_delay("a", 1_440);
+        let silent = run(&mut mixer, &mut tx, 20);
+        assert_eq!(silent, 3, "paused for the delay");
+        assert!(buffered(&tx).abs_diff(TARGET_FRAMES + 1_440) <= 480);
+
+        // Back to none: the excess is dropped at once.
+        mixer.set_delay("a", 0);
+        run(&mut mixer, &mut tx, 2);
+        assert!(buffered(&tx).abs_diff(TARGET_FRAMES) <= 480);
+
+        // Re-added sources keep their delay.
+        mixer.set_delay("a", 960);
+        let (_tx2, rx2) = source_ring();
+        mixer.set_input("a", Arc::new(ChannelControl::new(1.0, false)), rx2);
+        assert_eq!(mixer.inputs[0].delay, 960);
+    }
+
+    #[test]
+    fn delay_changes_while_waiting_to_prime() {
+        let master = Arc::new(ChannelControl::new(1.0, false));
+        let mut mixer = Mixer::new(master);
+        let mut out = vec![0.0; 480 * CHANNELS];
+        let buffered = |tx: &rtrb::Producer<f32>| (RING_SAMPLES - tx.slots()) / CHANNELS;
+
+        // Lowered before it primes: it starts at the new level, not above.
+        mixer.set_delay("a", 1_440);
+        let (mut tx, rx) = source_ring();
+        mixer.set_input("a", Arc::new(ChannelControl::new(1.0, false)), rx);
+        feed(&mut tx, 2_000, 0.1);
+        mixer.process(&mut out); // still filling towards 2880
+        mixer.set_delay("a", 0);
+        mixer.process(&mut out);
+        assert_eq!(buffered(&tx), TARGET_FRAMES - 480, "trimmed to the target");
+
+        // Changed just before an underrun: no second fade once it's back.
+        mixer.process(&mut out);
+        mixer.process(&mut out); // drained, still primed
+        assert_eq!(buffered(&tx), 0);
+        mixer.set_delay("a", 960);
+        mixer.process(&mut out); // underrun: nothing was fed
+        let mut silent = Vec::new();
+        for _ in 0..20 {
+            feed(&mut tx, 480, 0.1);
+            mixer.process(&mut out);
+            silent.push(out[out.len() - 1] == 0.0);
+        }
+        // Refilling to the 2400-frame target takes 4 blocks, then it plays.
+        let gap = silent.iter().filter(|&&s| s).count();
+        assert_eq!(gap, 4, "no second fade once it's back: {silent:?}");
+        assert!(!mixer.inputs[0].restart);
     }
 
     #[test]
