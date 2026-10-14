@@ -126,19 +126,16 @@ select {
 .brand { display: flex; align-items: center; gap: 10px; }
 .brand h1 { font-size: 17px; margin: 0; font-weight: 600; }
 .topbar-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
-/* Square buttons as tall as the text buttons beside them. */
-.topbar-actions button.icon { width: 34px; height: 34px; }
 
 .conn { font-size: 12px; color: var(--muted); padding: 2px 8px; border-radius: 99px; border: 1px solid var(--border); }
 .conn.up { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
 .conn.down { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, transparent); }
 
-.switch { color: var(--muted); cursor: pointer; white-space: nowrap; }
 /* Checkboxes are centred on their label's capitals: sat on the baseline,
    then lowered by a whole pixel (a fraction would round differently from
    row to row). Centring in the line box instead left them low beside
    Segoe UI. */
-.switch input, label.check input { margin: 0 3px 0 0; vertical-align: -1px; }
+label.check input { margin: 0 3px 0 0; vertical-align: -1px; }
 
 .banner {
   margin: 16px 24px 0;
@@ -397,8 +394,14 @@ button.icon.round { width: 40px; height: 40px; border-radius: 50%; }
 .update-text .hint:empty { display: none; }
 .update-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 #update-status, #update-banner-detail { min-width: 0; overflow-wrap: anywhere; }
-#update-mode { margin: 4px 0 10px; }
-.update-sub { margin-left: 22px; }
+#update-mode { margin: 4px 0 6px; }
+/* Settings: a column of sections, scrolling on short screens. */
+#settings-dialog .dialog-body { max-height: min(86vh, 760px); overflow: auto; }
+.settings section + section { border-top: 1px solid var(--border); padding-top: 12px; }
+.settings h3 { margin: 0 0 2px; font-size: 14px; }
+.settings .check { margin-top: 6px; }
+.settings .hint.small { margin: 2px 0 0; }
+.settings-sub { margin-left: 22px; }
 #update-btn[aria-disabled="true"] { opacity: 0.6; cursor: default; }
 
 .banner.bad {
