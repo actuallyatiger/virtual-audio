@@ -5,7 +5,7 @@ The UI's server listens on `http://127.0.0.1:47800` by default (`port` in
 
 | Method | Path | Body |
 | --- | --- | --- |
-| GET | `/api/state` | Everything the UI shows, including `version`, `admin_copy_version` (the Program Files copy's version if there is one, `"unknown"` if it predates versions) and `admin_copy_outdated`, and `update` (`{state, version, notes_url, message, checks}`; `state` is `idle`, `checking`, `up_to_date`, `available`, `downloading`, `ready`, `error` or `unsupported`, and `checks` counts finished checks) with `updates`, the update setting. Each sound has `even_db`, how much even out volumes (`even_sounds`) turns it up or down. |
+| GET | `/api/state` | Everything the UI shows, including `version`, `admin_copy_version` (the Program Files copy's version if there is one, `"unknown"` if it predates versions) and `admin_copy_outdated`, and `update` (`{state, version, notes_url, message}`; `state` is `idle`, `checking`, `up_to_date`, `available`, `downloading`, `ready`, `error` or `unsupported`) with `updates`, the update setting. Each sound has `even_db`, how much even out volumes (`even_sounds`) turns it up or down. |
 | GET | `/api/devices` | |
 | GET | `/api/apps` | |
 | POST | `/api/sources` | `{"kind":"app","exe":"chrome.exe"}` or `{"kind":"device","device":null}`, plus an optional `"name"`; or `{"kind":"soundboard"}` / `{"kind":"music"}` (one of each) |

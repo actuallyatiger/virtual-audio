@@ -372,9 +372,10 @@ button.icon.round { width: 40px; height: 40px; border-radius: 50%; }
 
 .toast {
   white-space: pre-line; max-height: 60vh; overflow: auto;
-  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  position: fixed; inset: auto; margin: 0; bottom: 20px; left: 50%; transform: translateX(-50%);
   background: var(--panel-2); border: 1px solid var(--bad); color: var(--text);
-  padding: 8px 14px; border-radius: 8px; max-width: calc(100vw - 32px);
+  padding: 8px 14px; border-radius: 8px;
+  width: max-content; max-width: min(520px, calc(100vw - 32px));
 }
 
 @media (max-width: 640px) {
