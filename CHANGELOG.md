@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.0](https://github.com/actuallyatiger/virtual-audio/compare/v0.2.1...v0.3.0) (2026-10-14)
+
+
+### Features
+
+* **autostart:** offer to update the administrator copy when opening another build ([a466333](https://github.com/actuallyatiger/virtual-audio/commit/a46633369d5e19b01a765848ab2f7edad90ee5c9))
+* **autostart:** run an installed copy and switch to it straight away ([3defa6a](https://github.com/actuallyatiger/virtual-audio/commit/3defa6a55177dab508d25174a65112cb99eb395b))
+* test builds that don't update themselves, and replacing any other build ([d3448e8](https://github.com/actuallyatiger/virtual-audio/commit/d3448e8e2f410f73acf02c8931009da04554091b))
+
+
+### Bug Fixes
+
+* **dsp:** level speech the way WebRTC's gain control does ([e8f4c1a](https://github.com/actuallyatiger/virtual-audio/commit/e8f4c1a023c54ede65bd8ceef743b211b9ef0474))
+* opening another copy now closes the running one ([54695c8](https://github.com/actuallyatiger/virtual-audio/commit/54695c86a9510d42ec1726b0df4b483d189c09b6))
+
 ## [0.2.1](https://github.com/actuallyatiger/virtual-audio/compare/v0.2.0...v0.2.1) (2026-10-14)
 
 
