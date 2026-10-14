@@ -316,6 +316,9 @@ fn allowed() -> Result<(), &'static str> {
     if !cfg!(windows) {
         return Err("Updates are for the Windows app.");
     }
+    if !crate::RELEASE {
+        return Err("This is a test build, so it doesn't update itself.");
+    }
     let exe = std::env::current_exe().map_err(|_| "Can't tell where the mixer is.")?;
     if crate::platform::is_elevated() && !crate::platform::is_admin_copy(&exe) {
         return Err(

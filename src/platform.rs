@@ -651,8 +651,9 @@ mod imp {
     /// recorded), replaced on the next update.
     const LEGACY: [&str; 2] = ["virtual-audio.exe", "virtual-audio.old.exe"];
 
-    /// Copies this exe into `dir`, unless that copy is this one or no
-    /// older, and returns the copy's path. A running copy can't be
+    /// Copies this exe into `dir`, unless that copy is this one or this
+    /// build doesn't replace it (see `crate::replaces`), and returns the
+    /// copy's path. A running copy can't be
     /// overwritten, but it can be renamed out of the way.
     fn install(dir: &Path) -> anyhow::Result<PathBuf> {
         let exe = std::env::current_exe()?;
@@ -660,10 +661,10 @@ mod imp {
         let mut moved_aside = false;
         if dest.exists() {
             if std::fs::canonicalize(&exe)? == std::fs::canonicalize(&dest)? {
-                let _ = std::fs::write(dir.join(VERSION_FILE), crate::VERSION);
+                let _ = std::fs::write(dir.join(VERSION_FILE), crate::build());
                 return Ok(dest);
             }
-            if !crate::is_older(&version_in(dir), crate::VERSION) {
+            if !crate::replaces(&version_in(dir)) {
                 return Ok(dest);
             }
             let old = dir.join(OLD_EXE);
@@ -680,7 +681,7 @@ mod imp {
             }
             return Err(e).with_context(|| format!("copying the mixer to {}", dir.display()));
         }
-        std::fs::write(dir.join(VERSION_FILE), crate::VERSION).context("recording the version")?;
+        std::fs::write(dir.join(VERSION_FILE), crate::build()).context("recording the version")?;
         for file in LEGACY {
             remove(&dir.join(file));
         }

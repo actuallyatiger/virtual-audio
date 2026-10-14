@@ -106,7 +106,7 @@ It runs as a small tray app and is controlled from a web page served on
   where only administrators can change it: starting the downloaded file
   as administrator would let any program that can replace it run as
   administrator too. Turning it on switches to that copy straight away.
-  When you open a newer version, it offers to close the older one that's
+  When you open another version, it offers to close the one that's
   running, and **Setup check** then offers to update that copy. It needs
   your account to be an administrator.
 - **Updates itself**: new versions download in the background and are
