@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.0](https://github.com/actuallyatiger/virtual-audio/compare/v0.1.0...v0.2.0) (2026-10-14)
+
+
+### Features
+
+* **ui:** a Settings dialog ([d237585](https://github.com/actuallyatiger/virtual-audio/commit/d2375850038c15d7acceee9ca87d0f71d96bee11))
+* **update:** automatic updates ([07bdcf5](https://github.com/actuallyatiger/virtual-audio/commit/07bdcf5e8a3f1bbfbc2ec2aa0830fea0904480b2)), closes [#25](https://github.com/actuallyatiger/virtual-audio/issues/25)
+
+
+### Bug Fixes
+
+* **ui:** call the ⚙ a card's settings, and other wording ([439921e](https://github.com/actuallyatiger/virtual-audio/commit/439921e08545fc0d33f45cd734c1e5a0d54bcebd))
+* **ui:** plainer text, and Help that's easy to scan ([325399f](https://github.com/actuallyatiger/virtual-audio/commit/325399f41038b59396c5fb50fc3c23672e274f9d))
+
 ## 0.1.0 (2026-10-14)
 
 
