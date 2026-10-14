@@ -447,8 +447,12 @@ struct Settings {
 }
 
 async fn set_settings(State(app): State<App>, Json(body): Json<Settings>) -> ApiResult {
+    let autostart = body.autostart.is_some() || body.autostart_admin.is_some();
     // Changing the elevated task waits for the user to answer a UAC prompt.
-    blocking(&app, StatusCode::BAD_REQUEST, move |e| {
+    let hand_over = blocking(&app, StatusCode::BAD_REQUEST, move |e| {
+        if !autostart {
+            return Ok(None);
+        }
         let admin = e.autostart_admin();
         let run_key = platform::autostart_enabled();
         let want = body.autostart.unwrap_or(admin || run_key);
@@ -461,12 +465,21 @@ async fn set_settings(State(app): State<App>, Json(body): Json<Settings>) -> Api
             platform::set_admin_autostart(want_admin)?;
             e.set_autostart_admin(want_admin);
         }
-        // The Run entry is only for the non-administrator mode.
+        // The Run entry is only for the non-administrator mode. Turning it
+        // on again installs this copy if it's newer than the installed one.
         let want_run_key = want && !want_admin;
-        if want_run_key != run_key {
+        if want_run_key || run_key {
             platform::set_autostart(want_run_key)?;
         }
-        Ok(())
+        let outdated =
+            platform::admin_copy_version().is_none_or(|v| crate::is_older(&v, crate::VERSION));
+        Ok(platform::hand_over_to(
+            want,
+            want_admin,
+            platform::this_copy(),
+            outdated,
+            platform::is_elevated(),
+        ))
     })
     .await?;
     // After the autostart change, so a cancelled UAC prompt changes nothing.
@@ -475,6 +488,11 @@ async fn set_settings(State(app): State<App>, Json(body): Json<Settings>) -> Api
     }
     if let Some(mode) = body.updates {
         app.engine.set_update_mode(mode);
+    }
+    // Run the installed copy now, rather than from the next sign-in.
+    if let Some(copy) = hand_over {
+        platform::hand_over_on_quit(copy);
+        return quit_app(State(app)).await;
     }
     ok()
 }

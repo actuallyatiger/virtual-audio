@@ -93,16 +93,20 @@ It runs as a small tray app and is controlled from a web page served on
   dark setting, or Settings picks one.
 - **Settings** has Start with Windows, the theme, the soundboard's even
   out volumes, and updates.
-- Start with Windows (runs in the background, tray icon only), optionally
+- Start with Windows (runs in the background, tray icon only). It installs
+  the mixer in `%LOCALAPPDATA%\Programs\Virtual Audio Mixer` and switches
+  to that copy straight away, so you can delete the file you downloaded.
+  Opening a newer download later updates that copy. Optionally
   **as Administrator** so hotkeys also work in games that run as
   administrator. That uses a Task Scheduler task with highest privileges,
   so Windows asks for permission once rather than at every sign-in. The
   task starts a copy of the mixer in `C:\Program Files\Virtual Audio Mixer`,
   where only administrators can change it: starting the downloaded file
   as administrator would let any program that can replace it run as
-  administrator too. When you open a newer version, it offers to close
-  the older one that's running, and **Setup check** then offers to update
-  that copy. It needs your account to be an administrator.
+  administrator too. Turning it on switches to that copy straight away.
+  When you open a newer version, it offers to close the older one that's
+  running, and **Setup check** then offers to update that copy. It needs
+  your account to be an administrator.
 - **Updates itself**: new versions download in the background and are
   checked to be genuine (signed) releases. **Restart to update** in the bar
   at the top (or the tray menu) installs one now; otherwise it's installed
@@ -163,6 +167,8 @@ The app understands these command-line flags:
   this.
 - `--verbose`: log extra debug detail.
 - `--replacing`: used by updates: wait for the copy being replaced to quit.
+- `--handed-over`: used by Start with Windows when another copy starts the
+  installed one: don't hand over again.
 
 **Listen says "Your Windows default output is …, which the mix already goes
 to"**: Listen plays on the Windows default output, so that must be your

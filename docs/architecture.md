@@ -54,6 +54,30 @@ paths allocates, blocks or waits on a lock another thread can hold for long
 (taps use `try_lock` and skip a block rather than wait). Where two locks are
 held, the engine's `inner` is always taken before the mixer.
 
+## Start with Windows
+
+Start with Windows runs an installed copy, never the file the user opened
+(usually a download they'll delete): `%LOCALAPPDATA%\Programs\Virtual Audio
+Mixer` through the `Run` registry entry, or, as administrator, Program Files
+through a scheduled task (see `platform.rs`). Each records its version in
+`version.txt` beside it. Installing never replaces a newer copy.
+
+Turning either on hands over at once: the settings handler marks the copy
+(`platform::hand_over_on_quit`) and quits, and `main` starts it once the port
+is free (the scheduled task can't be given `--replacing`). A copy that starts
+while Start with Windows is on, and isn't the installed one, installs itself
+over an older copy for this account and starts that instead
+(`platform::hand_over_to` decides; the copy it starts gets `--handed-over`, so
+it never hands over again). The started copy must answer on the port within
+15 s, or this one carries on (or, from Settings, starts itself again).
+
+It stays put if the administrator copy is older or missing (Setup check offers
+to update it, which needs the newer copy running), or if it runs as
+administrator and the setting isn't as Administrator: an elevated copy never
+starts, deletes or writes through a link into the copy for the account, whose
+folder the user controls (turning as Administrator off takes effect from the
+next sign-in).
+
 ## Updates
 
 Releases are signed with minisign in CI (the `MINISIGN_SECRET_KEY` secret),
