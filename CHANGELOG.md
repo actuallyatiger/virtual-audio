@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/actuallyatiger/virtual-audio/compare/v0.2.0...v0.2.1) (2026-10-14)
+
+
+### Bug Fixes
+
+* **ui:** error toasts show above dialogs; no toast after Check now ([2942174](https://github.com/actuallyatiger/virtual-audio/commit/29421741ad467dd70a351fd0bc112aad2a1c6686))
+
 ## [0.2.0](https://github.com/actuallyatiger/virtual-audio/compare/v0.1.0...v0.2.0) (2026-10-14)
 
 
