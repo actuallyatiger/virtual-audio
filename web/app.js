@@ -74,12 +74,15 @@ async function api(method, path, body) {
 }
 
 let toastTimer;
+/** Shows an error. It's a popover, so it sits above an open dialog rather
+ * than dimmed behind it; showing it again brings it to the front. */
 function toast(message) {
   const el = $("#toast");
   el.textContent = message;
-  el.hidden = false;
+  if (el.matches(":popover-open")) el.hidePopover();
+  el.showPopover();
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (el.hidden = true), 5000);
+  toastTimer = setTimeout(() => el.hidePopover(), 5000);
 }
 
 function attempt(promise) {
@@ -1961,7 +1964,6 @@ const UPDATE_STATUS = {
 };
 let updateBusy = false; // a click is being handled
 let restarting = null; // when the new version was started; the page reloads once it answers
-let checksAsked = null; // the check count when Check now was clicked
 
 function renderUpdate() {
   const u = state.update;
@@ -1975,10 +1977,6 @@ function renderUpdate() {
   $("#update-auto-check").checked = state.updates !== "off";
   $("#update-auto-install-wrap").hidden = state.updates === "off";
   if (state.updates !== "off") $("#update-auto-install").checked = state.updates === "auto";
-  if (checksAsked !== null && u.checks > checksAsked) {
-    checksAsked = null;
-    toast($("#update-status").textContent);
-  }
 
   // The bar: what's on offer, and the button for the next step.
   const failed = u.state === "error" && u.version;
@@ -2024,10 +2022,7 @@ $("#update-btn").addEventListener("click", () => {
       renderUpdate();
     });
 });
-$("#update-check").addEventListener("click", () => {
-  checksAsked = state.update.checks;
-  attempt(api("POST", "/api/update/check"));
-});
+$("#update-check").addEventListener("click", () => attempt(api("POST", "/api/update/check")));
 function saveUpdateMode() {
   const updates = !$("#update-auto-check").checked ? "off" : $("#update-auto-install").checked ? "auto" : "notify";
   $("#update-auto-install-wrap").hidden = updates === "off";

@@ -60,8 +60,6 @@ pub struct UpdateView {
     pub notes_url: Option<String>,
     /// What went wrong, last time (also while an update is still ready).
     pub message: String,
-    /// Finished checks, so the UI can answer "Check now".
-    pub checks: u64,
 }
 
 impl UpdateView {
@@ -71,7 +69,6 @@ impl UpdateView {
             version: None,
             notes_url: None,
             message: String::new(),
-            checks: 0,
         }
     }
 }
@@ -113,13 +110,9 @@ impl Updater {
         self.view.lock().unwrap().clone()
     }
 
-    /// Shows `view`, counting a finished check if `checked`.
-    fn set(&self, mut view: UpdateView, checked: bool) {
-        {
-            let mut current = self.view.lock().unwrap();
-            view.checks = current.checks + u64::from(checked);
-            *current = view;
-        }
+    /// Shows `view` and tells the UI.
+    fn set(&self, view: UpdateView) {
+        *self.view.lock().unwrap() = view;
         (self.notify)();
     }
 
@@ -138,7 +131,7 @@ impl Updater {
             return;
         }
         if let Some((version, _)) = staged() {
-            self.set(ready(version, None), false);
+            self.set(ready(version, None));
         }
         let (tx, rx) = mpsc::channel();
         *self.wake.lock().unwrap() = Some(tx);
@@ -210,7 +203,7 @@ impl Updater {
                 Some((version, _)) => ready(version, self.view().notes_url),
                 None => UpdateView::new("error"),
             };
-            self.set(UpdateView { message, ..view }, false);
+            self.set(UpdateView { message, ..view });
         }
         result
     }
@@ -226,7 +219,7 @@ impl Updater {
         // What's already on offer stays on screen while checking.
         let offering = matches!(before.state, "ready" | "available");
         if !offering {
-            self.set(UpdateView::new("checking"), false);
+            self.set(UpdateView::new("checking"));
         }
         let mut found = None;
         let view = self.try_check(download, &mut found).unwrap_or_else(|e| {
@@ -252,7 +245,7 @@ impl Updater {
                 }
             }
         });
-        self.set(view, true);
+        self.set(view);
     }
 
     /// `found` is set to the newer version once there is one, for the error.
@@ -287,7 +280,7 @@ impl Updater {
         }
         *found = Some(release.version.clone());
         if staged.is_none() {
-            self.set(view("downloading"), false);
+            self.set(view("downloading"));
         }
         let fetch = |url: &str| -> anyhow::Result<Vec<u8>> {
             Ok(agent
