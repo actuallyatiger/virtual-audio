@@ -13,6 +13,7 @@
 | Global hotkeys (polled, non-blocking) | `src/hotkeys.rs` |
 | HTTP/WebSocket API (axum) and embedded UI | `src/server.rs`, `web/` |
 | Tray icon, autostart, browser launch | `src/tray.rs`, `src/platform.rs` |
+| Updates: checking the latest release, downloading, verifying its signature, swapping the exe | `src/update.rs` |
 
 All audio runs at 48 kHz stereo float. Windows converts each device's native
 format (`AUTOCONVERTPCM`), and sounds are resampled to 48 kHz when they're
@@ -41,6 +42,10 @@ executable with `include_str!`, so the release is a single `.exe`.
   monitors as devices and apps come and go, and applies source delays.
 - **Music decoder**: streams the current track into a half-second feed.
 - **Hotkeys**: polls key state every 10 ms.
+- **Updates**: checks the latest release 30 s after start and every 6 hours
+  (unless the setting is `off`), and when asked; with the setting on `auto`
+  it downloads what it finds, and with `notify` it waits for **Download
+  update** (`/api/update/download`).
 - The axum server runs on a Tokio runtime; blocking work goes through
   `spawn_blocking`.
 
@@ -48,6 +53,34 @@ Rules that keep the audio glitch-free: nothing on the render or capture
 paths allocates, blocks or waits on a lock another thread can hold for long
 (taps use `try_lock` and skip a block rather than wait). Where two locks are
 held, the engine's `inner` is always taken before the mixer.
+
+## Updates
+
+Releases are signed with minisign in CI (the `MINISIGN_SECRET_KEY` secret),
+and the app has the public key built in (`update::PUBLIC_KEY`). The signature
+is appended to the exe, followed by its length in 8 digits and `VAMSIG01`, so
+a release is one file (Windows ignores what follows the program). A download is
+only kept if its signature checks out and the signature's trusted comment
+names that version, and it's checked again, from the bytes that get written,
+when it's installed: the data folder it waits in isn't protected the way
+Program Files is, and the administrator copy installs it elevated.
+
+The elevated administrator copy keeps downloads in its own Program Files
+folder instead, and a copy running elevated from anywhere else doesn't update
+itself at all: it would start a file the user's own programs could swap,
+elevated, without a prompt.
+
+Installing renames the running exe to `<name>.old.exe` (Windows allows that
+for a running exe, not overwriting it), writes the new one in its place, and
+starts it with `--replacing`, so it waits up to 30 s for the port; only then
+does this copy quit. If the new one won't start, this copy keeps running. A
+staged update is installed on the next start (before logging starts, so the
+previous run's log survives) if nobody clicked **Restart to update**.
+
+The update address is one constant (`update::LATEST`) and `parse_release`
+reads GitHub's release format. When the project moves host, the last
+release on the old host must ship with the new address and a parser for the
+new host's format; the signing key moves with it unchanged.
 
 ## Mic processing delay
 

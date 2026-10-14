@@ -30,6 +30,30 @@ pub struct Config {
     /// The web UI's colours.
     #[serde(deserialize_with = "theme_or_system")]
     pub theme: Theme,
+    /// How updates are looked for and fetched.
+    #[serde(deserialize_with = "update_mode_or_auto")]
+    pub updates: UpdateMode,
+}
+
+/// How updates are looked for (see [`crate::update`]).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateMode {
+    /// Check, and download what's found (installing still waits for a
+    /// restart).
+    #[default]
+    Auto,
+    /// Check, and offer to download.
+    Notify,
+    /// Only "Check now" checks.
+    Off,
+}
+
+/// A mode this build doesn't know (written by a newer one) falls back to the
+/// default instead of making the whole file unreadable.
+fn update_mode_or_auto<'de, D: Deserializer<'de>>(d: D) -> Result<UpdateMode, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(UpdateMode::deserialize(v).unwrap_or_default())
 }
 
 /// A theme this build doesn't know (written by a newer one) falls back to
@@ -113,6 +137,7 @@ impl Default for Config {
             autostart_admin: false,
             music: MusicConfig::default(),
             theme: Theme::System,
+            updates: UpdateMode::Auto,
         }
     }
 }
@@ -358,6 +383,20 @@ mod tests {
         assert_eq!(serde_json::to_value(&dark).unwrap()["theme"], "dark");
         let newer: Config = serde_json::from_str(r#"{"port":1,"theme":"sepia"}"#).unwrap();
         assert_eq!((newer.port, newer.theme), (1, Theme::System));
+    }
+
+    #[test]
+    fn updates_download_unless_turned_off() {
+        let old: Config = serde_json::from_str(r#"{"port":1}"#).unwrap();
+        assert_eq!(
+            old.updates,
+            UpdateMode::Auto,
+            "for configs from before updates"
+        );
+        let off: Config = serde_json::from_str(r#"{"updates":"off"}"#).unwrap();
+        assert_eq!(off.updates, UpdateMode::Off);
+        let newer: Config = serde_json::from_str(r#"{"updates":"nightly"}"#).unwrap();
+        assert_eq!(newer.updates, UpdateMode::Auto);
     }
 
     #[test]

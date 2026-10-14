@@ -10,7 +10,7 @@
 use crate::backend::{Backend, CaptureStream, CaptureTarget, DeviceInfo, NullRender, RenderStream};
 use crate::config::{
     Channel, Config, DeviceRef, GateMode, Hotkey, HotkeyAction, MusicItem, Processing, Repeat,
-    SoundConfig, SourceConfig, SourceKind, Theme, db_to_gain, new_id,
+    SoundConfig, SourceConfig, SourceKind, Theme, UpdateMode, db_to_gain, new_id,
 };
 use crate::dsp::{ProcessingControl, Processor};
 use crate::mixer::{ChannelControl, Mixer, MonitorTap, push_frames, source_ring};
@@ -174,6 +174,8 @@ pub struct Engine {
     music: Arc<MusicPlayer>,
     tap: MonitorTap,
     changed: tokio::sync::watch::Sender<u64>,
+    /// Updates from the releases; main starts its checks.
+    pub updater: Arc<crate::update::Updater>,
     shutdown: AtomicBool,
     /// Serializes supervise() runs (the supervisor thread and add_source),
     /// which no longer hold `inner` throughout.
@@ -387,6 +389,9 @@ impl Engine {
         for s in &config.sources {
             sources.insert(s.id.clone(), SourceRuntime::new(s));
         }
+        let notify = changed.clone();
+        let updater =
+            crate::update::Updater::new(config.updates, move || notify.send_modify(|v| *v += 1));
         let engine = Arc::new(Self {
             backend: Arc::from(backend),
             inner: Mutex::new(Inner {
@@ -407,6 +412,7 @@ impl Engine {
             music,
             tap,
             changed,
+            updater,
             shutdown: AtomicBool::new(false),
             rescanning: Mutex::new(()),
             supervising: Mutex::new(()),
@@ -606,6 +612,17 @@ impl Engine {
 
     pub fn theme(&self) -> Theme {
         self.inner.lock().unwrap().config.theme
+    }
+
+    pub fn update_mode(&self) -> UpdateMode {
+        self.inner.lock().unwrap().config.updates
+    }
+
+    pub fn set_update_mode(&self, mode: UpdateMode) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.config.updates = mode;
+        self.updater.set_mode(mode);
+        self.bump(&mut inner);
     }
 
     pub fn set_theme(&self, theme: Theme) {
@@ -2164,6 +2181,19 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         engine.state().monitor
+    }
+
+    #[test]
+    fn automatic_updates_can_be_turned_off() {
+        let engine = engine("cable");
+        assert_eq!(engine.update_mode(), UpdateMode::Auto);
+        // Whether this build may update itself depends on where it runs
+        // (the demo and elevated test runners don't); the setting holds
+        // either way.
+        let before = engine.version();
+        engine.set_update_mode(UpdateMode::Off);
+        assert_eq!(engine.update_mode(), UpdateMode::Off);
+        assert!(engine.version() > before);
     }
 
     #[test]

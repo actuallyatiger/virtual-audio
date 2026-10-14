@@ -546,6 +546,21 @@ mod imp {
         )
     }
 
+    /// Whether `exe` is the administrator copy in Program Files.
+    pub fn is_admin_copy(exe: &Path) -> bool {
+        install_dir().is_ok_and(|dir| exe.parent() == Some(dir.as_path()))
+    }
+
+    /// After an update replaced the exe at `exe`: if that's the copy in
+    /// Program Files, record its new version.
+    pub fn updated_in_place(exe: &Path, version: &str) {
+        if is_admin_copy(exe)
+            && let Ok(dir) = install_dir()
+        {
+            let _ = std::fs::write(dir.join(VERSION_FILE), version);
+        }
+    }
+
     /// Deletes a file now, or at the next restart if it's running.
     fn remove(path: &Path) {
         if path.exists() && std::fs::remove_file(path).is_err() {
@@ -622,6 +637,12 @@ mod imp {
 
     pub fn admin_copy_version() -> Option<String> {
         None
+    }
+
+    pub fn updated_in_place(_exe: &std::path::Path, _version: &str) {}
+
+    pub fn is_admin_copy(_exe: &std::path::Path) -> bool {
+        false
     }
 
     pub fn browse(_folders: bool) -> anyhow::Result<Vec<String>> {

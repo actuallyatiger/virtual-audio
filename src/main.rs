@@ -14,6 +14,7 @@ mod server;
 mod soundboard;
 #[cfg(windows)]
 mod tray;
+mod update;
 
 use config::{Channel, Config, DeviceRef, SourceConfig, SourceKind};
 
@@ -62,13 +63,20 @@ fn take_over(port: u16) -> anyhow::Result<std::net::TcpListener> {
         "POST /api/quit HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
     )?;
     drop(stream);
-    for _ in 0..100 {
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        if let Ok(listener) = std::net::TcpListener::bind(("127.0.0.1", port)) {
-            return Ok(listener);
+    wait_for_port(port, 10).map_err(|_| anyhow::anyhow!("the running copy didn't close"))
+}
+
+/// Takes the port once the copy that held it has quit (up to `seconds`).
+fn wait_for_port(port: u16, seconds: u32) -> std::io::Result<std::net::TcpListener> {
+    let mut result = std::net::TcpListener::bind(("127.0.0.1", port));
+    for _ in 0..seconds * 10 {
+        if result.is_ok() {
+            break;
         }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        result = std::net::TcpListener::bind(("127.0.0.1", port));
     }
-    anyhow::bail!("the running copy didn't close")
+    result
 }
 
 fn main() -> anyhow::Result<()> {
@@ -87,8 +95,11 @@ fn main() -> anyhow::Result<()> {
 
     let background = std::env::args().any(|a| a == "--background");
     let verbose = std::env::args().any(|a| a == "--verbose");
+    // Started by an update: the copy it replaces is still letting go of
+    // the port.
+    let replacing = std::env::args().any(|a| a == "--replacing");
 
-    let loaded = Config::read();
+    let mut loaded = Config::read();
     let port = match &loaded {
         Ok(Some(config)) => config.port,
         _ => config::DEFAULT_PORT,
@@ -98,8 +109,21 @@ fn main() -> anyhow::Result<()> {
     // The port doubles as a single-instance lock: if it is taken, another
     // copy is running, so just show its UI. This happens before logging is
     // set up so a second launch doesn't rotate the running copy's log.
-    let listener = match std::net::TcpListener::bind(("127.0.0.1", port)) {
+    let bind = || std::net::TcpListener::bind(("127.0.0.1", port));
+    let listener = match bind().or_else(|e| {
+        if replacing {
+            // The old copy saves and stops its audio first.
+            wait_for_port(port, 30)
+        } else {
+            Err(e)
+        }
+    }) {
         Ok(l) => l,
+        Err(e) if replacing => {
+            init_logging(verbose);
+            tracing::error!("the previous copy didn't let go of port {port} ({e}); not starting");
+            return Ok(());
+        }
         Err(_) if background => return Ok(()),
         Err(_) => match running_version(port) {
             // An older copy (often the administrator one starting at sign-in)
@@ -120,13 +144,28 @@ fn main() -> anyhow::Result<()> {
         },
     };
     listener.set_nonblocking(true)?;
+    if replacing {
+        // As the previous copy saved it on its way out.
+        loaded = Config::read();
+    }
 
+    // A downloaded update is installed before logging starts, so the
+    // previous run's log isn't rotated away by both this copy and the new.
+    let update_failed = match update::install_on_start(background) {
+        Some(Ok(())) => return Ok(()),
+        Some(Err(e)) => Some(e),
+        None => None,
+    };
     init_logging(verbose);
     tracing::info!(
         "Virtual Audio Mixer {} starting, args: {:?}",
         VERSION,
         std::env::args().skip(1).collect::<Vec<_>>()
     );
+    if let Some(e) = update_failed {
+        tracing::error!("installing the update: {e:#}");
+    }
+    update::clean_up();
     // Start with Windows starts the copy opened last, so a new download
     // (which may have another name or folder) takes over from the old one.
     if !background
@@ -162,6 +201,7 @@ fn main() -> anyhow::Result<()> {
         apply_first_run_defaults(&mut config, &*backend);
     }
     let engine = engine::Engine::new(backend, config);
+    engine.updater.start();
     hotkeys::spawn(engine.clone());
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -183,7 +223,7 @@ fn main() -> anyhow::Result<()> {
         if !background {
             platform::shell_open(&url);
         }
-        if let Err(e) = tray::run(url, move || quit()) {
+        if let Err(e) = tray::run(url, move || quit(), engine.updater.clone()) {
             tracing::error!("tray icon failed: {e:#}");
         }
     }
@@ -301,5 +341,18 @@ mod tests {
         assert!(!is_older("0.3.0", "0.2.0"));
         assert!(!is_older("0.2.0", "0.2.0"));
         assert!(is_older("unknown", "0.1.0"));
+    }
+
+    #[test]
+    fn waits_for_the_port_to_come_free() {
+        let held = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = held.local_addr().unwrap().port();
+        assert!(wait_for_port(port, 0).is_err(), "taken");
+        let letting_go = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            drop(held);
+        });
+        assert!(wait_for_port(port, 5).is_ok(), "taken over once it's free");
+        letting_go.join().unwrap();
     }
 }

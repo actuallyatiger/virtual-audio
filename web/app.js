@@ -154,10 +154,16 @@ function connect() {
   };
 }
 
+let loadedVersion = null;
+
 function render(next) {
   state = next;
   if (!themeSaves && state.theme !== appliedTheme) applyTheme(state.theme);
   $("#help-version").textContent = `Virtual Audio Mixer ${state.version}`;
+  // Updated and restarted: this page is the old version's.
+  if (loadedVersion && state.version !== loadedVersion) location.reload();
+  loadedVersion = state.version;
+  renderUpdate();
   $("#demo-banner").hidden = state.platform_supported;
   $("#autostart-wrap").hidden = !state.platform_supported;
   $("#autostart").checked = state.autostart;
@@ -1941,6 +1947,96 @@ $("#add-hotkey").addEventListener("click", () => {
 });
 
 // ---------------------------------------------------------------- settings
+
+// Updates: the bar at the top offers the next step, Help shows the status.
+const sentence = (text) => (text ? `${text[0].toUpperCase()}${text.slice(1)}${/[.!?…]$/.test(text) ? "" : "."}` : "");
+const UPDATE_STATUS = {
+  idle: () => "Not checked yet.",
+  checking: () => "Checking for updates…",
+  up_to_date: () => "You're up to date.",
+  available: (u) => `Version ${u.version} is out.`,
+  downloading: (u) => `Downloading version ${u.version}…`,
+  ready: (u) => `Version ${u.version} is ready to install.`,
+  error: (u) => sentence(u.message),
+  unsupported: (u) => u.message,
+};
+let updateBusy = false; // a click is being handled
+let restarting = null; // when the new version was started; the page reloads once it answers
+let checksAsked = null; // the check count when Check now was clicked
+
+function renderUpdate() {
+  const u = state.update;
+  // Back, but still this version: the restart didn't happen.
+  if (restarting && u.state !== "ready") restarting = null;
+  $("#update-status").textContent = (UPDATE_STATUS[u.state] || UPDATE_STATUS.idle)(u);
+  $("#update-check").hidden = u.state === "unsupported";
+  $("#update-check").disabled = u.state === "checking" || u.state === "downloading";
+  $("#update-mode").hidden = u.state === "unsupported";
+  // Two boxes over one setting: off, notify (check only) or auto.
+  $("#update-auto-check").checked = state.updates !== "off";
+  $("#update-auto-install-wrap").hidden = state.updates === "off";
+  if (state.updates !== "off") $("#update-auto-install").checked = state.updates === "auto";
+  if (checksAsked !== null && u.checks > checksAsked) {
+    checksAsked = null;
+    toast($("#update-status").textContent);
+  }
+
+  // The bar: what's on offer, and the button for the next step.
+  const failed = u.state === "error" && u.version;
+  const show = ["available", "downloading", "ready"].includes(u.state) || failed;
+  $("#update-banner").hidden = !show;
+  if (!show) return;
+  const late = restarting && Date.now() - restarting > 30_000;
+  let text, button;
+  if (restarting) [text, button] = [late ? "The mixer didn't restart. Open virtual-audio-mixer.exe again." : "Restarting…", null];
+  else if (u.state === "ready") [text, button] = [`Version ${u.version} is ready.`, "Restart to update"];
+  else if (u.state === "available") [text, button] = [`Version ${u.version} is out.`, "Download update"];
+  else if (u.state === "downloading") [text, button] = [`Downloading version ${u.version}…`, null];
+  else [text, button] = [`Couldn't download version ${u.version}.`, "Try again"];
+  $("#update-banner-text").textContent = text;
+  // The cause only: the line above already says what failed.
+  const cause = u.message.replace(/^couldn't download version [^:]+: /i, "");
+  $("#update-banner-detail").textContent = restarting ? "" : sentence(cause);
+  $("#update-notes").hidden = !u.notes_url;
+  if (u.notes_url) $("#update-notes").href = u.notes_url;
+  // The button stays put while busy, so keyboard focus isn't lost.
+  const btn = $("#update-btn");
+  btn.hidden = late;
+  btn.textContent = button || (restarting ? "Restarting…" : "Downloading…");
+  btn.setAttribute("aria-disabled", String(!button || updateBusy));
+}
+
+$("#update-btn").addEventListener("click", () => {
+  const u = state.update;
+  if (updateBusy || restarting || $("#update-btn").getAttribute("aria-disabled") === "true") return;
+  const install = u.state === "ready";
+  updateBusy = true;
+  renderUpdate();
+  api("POST", install ? "/api/update/install" : "/api/update/download")
+    .then(() => {
+      if (install) {
+        restarting = Date.now();
+        setTimeout(renderUpdate, 30_500);
+      }
+    })
+    .catch((e) => toast(e.message))
+    .finally(() => {
+      updateBusy = false;
+      renderUpdate();
+    });
+});
+$("#update-check").addEventListener("click", () => {
+  checksAsked = state.update.checks;
+  attempt(api("POST", "/api/update/check"));
+});
+function saveUpdateMode() {
+  const updates = !$("#update-auto-check").checked ? "off" : $("#update-auto-install").checked ? "auto" : "notify";
+  $("#update-auto-install-wrap").hidden = updates === "off";
+  attempt(api("PUT", "/api/settings", { updates }));
+}
+$("#update-auto-check").addEventListener("change", saveUpdateMode);
+$("#update-auto-install").addEventListener("change", saveUpdateMode);
+
 
 // The theme: the server writes a chosen one into the page, so it's right
 // from the first paint; this keeps it in step with the button and other tabs.

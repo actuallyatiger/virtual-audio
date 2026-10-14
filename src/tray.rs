@@ -5,7 +5,8 @@ use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEv
 use windows::Win32::Foundation::{LPARAM, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetMessageW, MSG, PostThreadMessageW, TranslateMessage, WM_QUIT,
+    DispatchMessageW, GetMessageW, MSG, PostThreadMessageW, SetTimer, TranslateMessage, WM_QUIT,
+    WM_TIMER,
 };
 
 /// Returns a function that ends [`run`] from any thread.
@@ -16,14 +17,23 @@ pub fn quit_handle() -> impl Fn() + Send + Sync + 'static {
     }
 }
 
+/// How often the menu catches up with updates.
+const REFRESH_MS: u32 = 30_000;
+
 /// Shows the tray icon and pumps messages until WM_QUIT. Must run on the
 /// thread that called [`quit_handle`].
-pub fn run(url: String, quit: impl Fn() + Send + Sync + 'static) -> anyhow::Result<()> {
+pub fn run(
+    url: String,
+    quit: impl Fn() + Send + Sync + 'static,
+    updater: std::sync::Arc<crate::update::Updater>,
+) -> anyhow::Result<()> {
     let title = MenuItem::new(
         format!("Virtual Audio Mixer {}", crate::VERSION),
         false,
         None,
     );
+    // Shown under the title while an update is ready.
+    let update = MenuItem::new("", true, None);
     let open = MenuItem::new("Open mixer", true, None);
     let log = MenuItem::new("Open log file", true, None);
     let exit = MenuItem::new("Quit", true, None);
@@ -36,17 +46,29 @@ pub fn run(url: String, quit: impl Fn() + Send + Sync + 'static) -> anyhow::Resu
         &PredefinedMenuItem::separator(),
         &exit,
     ])?;
-    let _tray = TrayIconBuilder::new()
-        .with_menu(Box::new(menu))
+    let tray = TrayIconBuilder::new()
+        .with_menu(Box::new(menu.clone()))
         .with_menu_on_left_click(false)
         .with_tooltip("Virtual Audio Mixer")
         .with_icon(icon()?)
         .build()?;
 
     let (open_id, log_id, exit_id) = (open.id().clone(), log.id().clone(), exit.id().clone());
+    let update_id = update.id().clone();
     let menu_url = url.clone();
+    let installer = updater.clone();
+    let quit = std::sync::Arc::new(quit);
     MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
-        if event.id == open_id {
+        if event.id == update_id {
+            // Writing a big exe (with antivirus looking at it) shouldn't
+            // freeze the tray.
+            let (installer, quit, url) = (installer.clone(), quit.clone(), menu_url.clone());
+            std::thread::spawn(move || match installer.install_and_launch() {
+                Ok(()) => quit(),
+                // The mixer's page says what went wrong.
+                Err(_) => crate::platform::shell_open(&url),
+            });
+        } else if event.id == open_id {
             crate::platform::shell_open(&menu_url);
         } else if event.id == log_id {
             crate::platform::shell_open(&crate::log_path().display().to_string());
@@ -66,9 +88,40 @@ pub fn run(url: String, quit: impl Fn() + Send + Sync + 'static) -> anyhow::Resu
     }));
 
     tracing::info!("tray icon ready");
+    // Whether the update item is in the menu.
+    let mut offering = false;
+    let mut refresh = || {
+        let view = updater.view();
+        let ready = view.state == "ready";
+        if ready {
+            let version = view.version.unwrap_or_default();
+            update.set_text(format!("Restart to update to {version}"));
+        }
+        if ready != offering {
+            let changed = if ready {
+                menu.insert(&update, 1)
+            } else {
+                menu.remove(&update)
+            };
+            offering = ready && changed.is_ok();
+            let tip = if offering {
+                "Virtual Audio Mixer: an update is ready"
+            } else {
+                "Virtual Audio Mixer"
+            };
+            let _ = tray.set_tooltip(Some(tip));
+        }
+    };
+    refresh();
     let mut msg = MSG::default();
     unsafe {
+        // A thread timer: WM_TIMER arrives in this loop.
+        SetTimer(None, 0, REFRESH_MS, None);
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+            if msg.message == WM_TIMER && msg.hwnd.is_invalid() {
+                refresh();
+                continue;
+            }
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }

@@ -5,7 +5,7 @@ The UI's server listens on `http://127.0.0.1:47800` by default (`port` in
 
 | Method | Path | Body |
 | --- | --- | --- |
-| GET | `/api/state` | Everything the UI shows, including `version`, `admin_copy_version` (the Program Files copy's version if there is one, `"unknown"` if it predates versions) and `admin_copy_outdated`. Each sound has `even_db`, how much even out volumes (`even_sounds`) turns it up or down. |
+| GET | `/api/state` | Everything the UI shows, including `version`, `admin_copy_version` (the Program Files copy's version if there is one, `"unknown"` if it predates versions) and `admin_copy_outdated`, and `update` (`{state, version, notes_url, message, checks}`; `state` is `idle`, `checking`, `up_to_date`, `available`, `downloading`, `ready`, `error` or `unsupported`, and `checks` counts finished checks) with `updates`, the update setting. Each sound has `even_db`, how much even out volumes (`even_sounds`) turns it up or down. |
 | GET | `/api/devices` | |
 | GET | `/api/apps` | |
 | POST | `/api/sources` | `{"kind":"app","exe":"chrome.exe"}` or `{"kind":"device","device":null}`, plus an optional `"name"`; or `{"kind":"soundboard"}` / `{"kind":"music"}` (one of each) |
@@ -31,8 +31,11 @@ The UI's server listens on `http://127.0.0.1:47800` by default (`port` in
 | POST | `/api/music/tracks/restore` | Puts every removed track back |
 | POST | `/api/music/browse` | `{"folders":true}`: shows the Windows file picker; returns `{"paths":[…]}` |
 | PUT | `/api/hotkeys` | `[{"keys":"Ctrl+Shift+M","action":"push_to_talk","target":"…"}]`. Actions: `toggle_mute`, `push_to_talk`, `push_to_mute` (target: `master` or a source id), `play_sound` (target: a sound id), `stop_sounds`, `music_play_pause`, `music_next`, `music_previous`. |
-| PUT | `/api/settings` | `{"autostart":true,"autostart_admin":false,"theme":"system"}` (`theme`: `"system"`, `"light"` or `"dark"`). Changing `autostart_admin` shows a Windows permission prompt and waits for it. |
+| PUT | `/api/settings` | `{"autostart":true,"autostart_admin":false,"theme":"system","updates":"auto"}` (`theme`: `"system"`, `"light"` or `"dark"`; `updates`: `"auto"` to download what's found, `"notify"` to offer it, `"off"` to check only when asked). Changing `autostart_admin` shows a Windows permission prompt and waits for it. |
 | POST | `/api/quit` | Stops the app. |
+| POST | `/api/update/check` | Checks for an update now (and downloads it, with `updates` on `auto`). |
+| POST | `/api/update/download` | Downloads the update that's out (or retries a failed download). |
+| POST | `/api/update/install` | Installs the downloaded update and starts it; this copy then quits. |
 | GET | `/ws` | WebSocket: pushes `state` on change (including `monitor`, Listen's `{state, message}`) and `meters` about 30 times a second (with `playing`, the sounds playing now, each mic's `mic_level` and `mic_gate_open`, `mic_auto_level_db` for mics with automatic level on, and `music_position_ms`). Send `{"type":"listen","on":true}` to monitor the mix; it plays while any connection has it on, and a connection's request ends when it closes. |
 
 Requests whose `Host` or `Origin` isn't `127.0.0.1`/`localhost` on our port are
