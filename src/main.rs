@@ -66,6 +66,37 @@ fn take_over(port: u16) -> anyhow::Result<std::net::TcpListener> {
     wait_for_port(port, 10).map_err(|_| anyhow::anyhow!("the running copy didn't close"))
 }
 
+/// Waits up to `seconds` for a mixer to answer on `port`.
+fn wait_for_mixer(port: u16, seconds: u32) -> bool {
+    (0..seconds * 5).any(|_| {
+        running_version(port).is_some() || {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            false
+        }
+    })
+}
+
+/// The installed copy Start with Windows runs, if it should run in place of
+/// this one. A copy for this account is installed, or updated, first.
+fn installed_to_run(admin: bool) -> Option<platform::Installed> {
+    let outdated = platform::admin_copy_version().is_none_or(|v| is_older(&v, VERSION));
+    let autostart = admin || platform::autostart_enabled();
+    let copy = platform::hand_over_to(
+        autostart,
+        admin,
+        platform::this_copy(),
+        outdated,
+        platform::is_elevated(),
+    )?;
+    if copy == platform::Installed::User
+        && let Err(e) = platform::set_autostart(true)
+    {
+        tracing::warn!("couldn't install the copy Start with Windows runs: {e:#}");
+        return None;
+    }
+    Some(copy)
+}
+
 /// Takes the port once the copy that held it has quit (up to `seconds`).
 fn wait_for_port(port: u16, seconds: u32) -> std::io::Result<std::net::TcpListener> {
     let mut result = std::net::TcpListener::bind(("127.0.0.1", port));
@@ -98,6 +129,8 @@ fn main() -> anyhow::Result<()> {
     // Started by an update: the copy it replaces is still letting go of
     // the port.
     let replacing = std::env::args().any(|a| a == "--replacing");
+    // Started by another copy as the installed one: never hand over again.
+    let handed_over = std::env::args().any(|a| a == "--handed-over");
 
     let mut loaded = Config::read();
     let port = match &loaded {
@@ -143,7 +176,6 @@ fn main() -> anyhow::Result<()> {
             }
         },
     };
-    listener.set_nonblocking(true)?;
     if replacing {
         // As the previous copy saved it on its way out.
         loaded = Config::read();
@@ -165,15 +197,44 @@ fn main() -> anyhow::Result<()> {
     if let Some(e) = update_failed {
         tracing::error!("installing the update: {e:#}");
     }
+    // Start with Windows runs an installed copy. Opening another one (such
+    // as the download) brings it up to date and starts it instead.
+    let admin = matches!(&loaded, Ok(Some(config)) if config.autostart_admin);
+    let listener = match installed_to_run(admin).filter(|_| !handed_over) {
+        None => {
+            if !platform::autostart_enabled() {
+                platform::remove_user_copy();
+            }
+            listener
+        }
+        Some(copy) => {
+            drop(listener);
+            let started = platform::start_installed(copy).and_then(|()| {
+                anyhow::ensure!(wait_for_mixer(port, 15), "it didn't start");
+                Ok(())
+            });
+            match started {
+                Ok(()) => {
+                    tracing::info!("started the installed copy ({copy:?}) in place of this one");
+                    update::clean_up_now();
+                    if !background {
+                        platform::shell_open(&url);
+                    }
+                    return Ok(());
+                }
+                Err(e) => {
+                    tracing::error!("starting the installed copy ({copy:?}): {e:#}");
+                    match wait_for_port(port, 5) {
+                        Ok(listener) => listener,
+                        // It started after all.
+                        Err(_) => return Ok(()),
+                    }
+                }
+            }
+        }
+    };
     update::clean_up();
-    // Start with Windows starts the copy opened last, so a new download
-    // (which may have another name or folder) takes over from the old one.
-    if !background
-        && platform::autostart_enabled()
-        && let Err(e) = platform::set_autostart(true)
-    {
-        tracing::warn!("couldn't point Start with Windows at this copy: {e:#}");
-    }
+    listener.set_nonblocking(true)?;
     let (mut config, first_run) = match loaded {
         Ok(Some(config)) => (config, false),
         Ok(None) => (Config::default(), true),
@@ -249,6 +310,21 @@ fn main() -> anyhow::Result<()> {
     tracing::info!("shutting down");
     engine.shutdown();
     runtime.shutdown_timeout(std::time::Duration::from_millis(500));
+    // Start with Windows was just turned on: the installed copy takes over
+    // now that this one has let go of the port.
+    if let Some(copy) = platform::take_hand_over() {
+        tracing::info!("starting the installed copy ({copy:?})");
+        let started = platform::start_installed(copy).and_then(|()| {
+            anyhow::ensure!(wait_for_mixer(port, 15), "it didn't start");
+            Ok(())
+        });
+        if let Err(e) = started {
+            tracing::error!("starting the installed copy: {e:#}; starting this one again");
+            if let Ok(exe) = std::env::current_exe() {
+                let _ = std::process::Command::new(exe).arg("--background").spawn();
+            }
+        }
+    }
     Ok(())
 }
 

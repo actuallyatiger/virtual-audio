@@ -1,6 +1,13 @@
 //! Small OS integrations: start-with-Windows (optionally as administrator),
 //! elevation, and opening URLs/files.
 //!
+//! Start with Windows runs an installed copy rather than the file the user
+//! opened (often a download they'll delete): `%LOCALAPPDATA%\Programs`, or
+//! Program Files for the administrator copy. Opening another copy, or
+//! turning the setting on, hands over to the installed one straight away.
+//! A copy running as administrator never starts, deletes or (through a
+//! link) writes the copy for the account: the user controls that folder.
+//!
 //! Starting as administrator matters for hotkeys: while an elevated app (some
 //! games) is focused, Windows hides its keys from apps that aren't elevated.
 //! A `Run` registry entry can't start an app elevated without a UAC prompt at
@@ -9,6 +16,52 @@
 //! mixer re-launches itself elevated (`--admin-autostart on|off --user …`) to
 //! do it, which shows one UAC prompt. The task starts a copy of the mixer in
 //! Program Files, never a file the user's own programs could replace.
+
+/// The copies Start with Windows runs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Installed {
+    /// In `%LOCALAPPDATA%\Programs`, started by the `Run` registry entry.
+    User,
+    /// In Program Files, started elevated by the scheduled task.
+    Admin,
+}
+
+/// Which installed copy should run in place of this one (`this`, if it is
+/// one), given the Start with Windows settings. An outdated (or missing)
+/// administrator copy isn't handed to: Setup check offers to update it first, which
+/// needs this newer copy. A copy running as administrator never starts the
+/// copy for this account: that file is the user's to change, so it mustn't
+/// run elevated (and run as administrator by hand, it shouldn't lose its
+/// hotkeys in games that run as administrator either).
+pub fn hand_over_to(
+    autostart: bool,
+    admin: bool,
+    this: Option<Installed>,
+    admin_outdated: bool,
+    elevated: bool,
+) -> Option<Installed> {
+    let target = match (autostart, admin) {
+        (false, _) => return None,
+        (true, true) if admin_outdated => return None,
+        (true, true) => Installed::Admin,
+        (true, false) if elevated => return None,
+        (true, false) => Installed::User,
+    };
+    (this != Some(target)).then_some(target)
+}
+
+/// The installed copy to start once this one has quit.
+static HAND_OVER: std::sync::Mutex<Option<Installed>> = std::sync::Mutex::new(None);
+
+/// Makes quitting start the installed copy `to` (see [`take_hand_over`]).
+pub fn hand_over_on_quit(to: Installed) {
+    *HAND_OVER.lock().unwrap_or_else(|e| e.into_inner()) = Some(to);
+}
+
+/// The installed copy to start now that this one has quit, if any.
+pub fn take_hand_over() -> Option<Installed> {
+    HAND_OVER.lock().unwrap_or_else(|e| e.into_inner()).take()
+}
 
 /// Name of the scheduled task.
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -100,9 +153,10 @@ mod imp {
         GetCurrentProcess, GetExitCodeProcess, OpenProcessToken, WaitForSingleObject,
     };
     use windows::Win32::UI::Shell::{
-        FOLDERID_ProgramFiles, FOLDERID_System, FOLDERID_Windows, KF_FLAG_DEFAULT,
-        SEE_MASK_NO_CONSOLE, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
-        SHGetKnownFolderPath, ShellExecuteExW, ShellExecuteW,
+        FOLDERID_ProgramFiles, FOLDERID_System, FOLDERID_UserProgramFiles, FOLDERID_Windows,
+        KF_FLAG_DEFAULT, KF_FLAG_DONT_VERIFY, KNOWN_FOLDER_FLAG, SEE_MASK_NO_CONSOLE,
+        SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, SHGetKnownFolderPath,
+        ShellExecuteExW, ShellExecuteW,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         IDYES, MB_ICONQUESTION, MB_SETFOREGROUND, MB_YESNO, MessageBoxW, SW_HIDE, SW_SHOWNORMAL,
@@ -129,10 +183,26 @@ mod imp {
         }
     }
 
+    /// Turns the `Run` entry on, installing (or updating) the copy for this
+    /// account that it starts, or off, removing that copy.
     pub fn set_autostart(enabled: bool) -> anyhow::Result<()> {
         unsafe {
             if enabled {
-                let exe = std::env::current_exe()?;
+                let dir = user_dir()?;
+                // As administrator, don't follow a link the user could have
+                // put there into a folder only administrators may change.
+                if is_elevated()
+                    && [EXE, OLD_EXE, VERSION_FILE]
+                        .iter()
+                        .any(|f| through_link(&dir.join(f)))
+                {
+                    bail!(
+                        "{} goes through a link; turn this on without running as administrator",
+                        dir.display()
+                    );
+                }
+                std::fs::create_dir_all(&dir).context("creating the install folder")?;
+                let exe = install(&dir)?;
                 let cmd: Vec<u16> = format!("\"{}\" --background", exe.display())
                     .encode_utf16()
                     .chain(std::iter::once(0))
@@ -146,11 +216,63 @@ mod imp {
                     (cmd.len() * 2) as u32,
                 )
                 .ok()?;
-            } else if autostart_enabled() {
-                RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN_KEY, VALUE).ok()?;
+            } else {
+                if autostart_enabled() {
+                    RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN_KEY, VALUE).ok()?;
+                }
+                remove_user_copy();
             }
         }
         Ok(())
+    }
+
+    /// Deletes the copy for this account, unless it's this one (a running
+    /// exe can't be deleted; it goes the next time another copy starts).
+    /// Not as administrator, which mustn't delete in a folder the user
+    /// controls.
+    pub fn remove_user_copy() {
+        let Ok(dir) = user_dir() else {
+            return;
+        };
+        if is_elevated() || this_copy() == Some(super::Installed::User) || !dir.exists() {
+            return;
+        }
+        for file in [EXE, OLD_EXE, VERSION_FILE] {
+            let _ = std::fs::remove_file(dir.join(file));
+        }
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// Starts the installed copy, in the background.
+    pub fn start_installed(copy: super::Installed) -> anyhow::Result<()> {
+        if copy == super::Installed::Admin {
+            let name = std::ffi::OsStr::new(super::TASK_NAME);
+            let out = schtasks(&["/Run".as_ref(), "/TN".as_ref(), name])?;
+            if !out.status.success() {
+                return Err(failure(&out));
+            }
+            return Ok(());
+        }
+        // A file the user can change never runs as administrator.
+        anyhow::ensure!(!is_elevated(), "running as administrator");
+        let exe = user_dir()?.join(EXE);
+        std::process::Command::new(&exe)
+            .args(["--background", "--handed-over"])
+            .spawn()
+            .with_context(|| format!("starting {}", exe.display()))?;
+        Ok(())
+    }
+
+    /// Whether `path`, or a folder above it, is a link (a junction or
+    /// symbolic link). (A link put there later is a race against a few
+    /// fixed names and the mixer's own files, so it's left at that.)
+    fn through_link(path: &Path) -> bool {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        path.ancestors().any(|p| {
+            std::fs::symlink_metadata(p)
+                .is_ok_and(|m| m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
+        })
     }
 
     /// Asks a yes/no question in a Windows message box.
@@ -204,8 +326,12 @@ mod imp {
 
     /// A known folder such as Program Files or System32.
     fn known_folder(id: &GUID) -> anyhow::Result<PathBuf> {
+        known_folder_with(id, KF_FLAG_DEFAULT)
+    }
+
+    fn known_folder_with(id: &GUID, flags: KNOWN_FOLDER_FLAG) -> anyhow::Result<PathBuf> {
         unsafe {
-            let p = SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None)?;
+            let p = SHGetKnownFolderPath(id, flags, None)?;
             let path = p.to_string();
             CoTaskMemFree(Some(p.0 as *const _));
             Ok(PathBuf::from(path?))
@@ -385,6 +511,26 @@ mod imp {
         Ok(known_folder(&FOLDERID_ProgramFiles)?.join("Virtual Audio Mixer"))
     }
 
+    /// Where Start with Windows installs the mixer for this account
+    /// (`%LOCALAPPDATA%\Programs`, which may not exist yet).
+    fn user_dir() -> anyhow::Result<PathBuf> {
+        Ok(
+            known_folder_with(&FOLDERID_UserProgramFiles, KF_FLAG_DONT_VERIFY)?
+                .join("Virtual Audio Mixer"),
+        )
+    }
+
+    /// Whether `exe` is in `dir`, however either is spelled.
+    fn in_dir(exe: &Path, dir: &Path) -> bool {
+        let Some(parent) = exe.parent() else {
+            return false;
+        };
+        match (std::fs::canonicalize(parent), std::fs::canonicalize(dir)) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => parent == dir,
+        }
+    }
+
     /// Only one change to the task at a time.
     static CHANGING: Mutex<()> = Mutex::new(());
 
@@ -505,31 +651,53 @@ mod imp {
     /// recorded), replaced on the next update.
     const LEGACY: [&str; 2] = ["virtual-audio.exe", "virtual-audio.old.exe"];
 
-    /// Copies this exe into `dir` (unless it is that copy) and returns the
-    /// copy's path. A running copy can't be overwritten, but it can be
-    /// renamed out of the way.
+    /// Copies this exe into `dir`, unless that copy is this one or no
+    /// older, and returns the copy's path. A running copy can't be
+    /// overwritten, but it can be renamed out of the way.
     fn install(dir: &Path) -> anyhow::Result<PathBuf> {
         let exe = std::env::current_exe()?;
         let dest = dir.join(EXE);
+        let mut moved_aside = false;
         if dest.exists() {
             if std::fs::canonicalize(&exe)? == std::fs::canonicalize(&dest)? {
+                let _ = std::fs::write(dir.join(VERSION_FILE), crate::VERSION);
+                return Ok(dest);
+            }
+            if !crate::is_older(&version_in(dir), crate::VERSION) {
                 return Ok(dest);
             }
             let old = dir.join(OLD_EXE);
             let _ = std::fs::remove_file(&old);
             std::fs::rename(&dest, &old)
                 .context("replacing the installed copy (quit other copies of the mixer, or restart, and try again)")?;
+            moved_aside = true;
         }
-        std::fs::copy(&exe, &dest).context("copying the mixer to Program Files")?;
+        if let Err(e) = std::fs::copy(&exe, &dest) {
+            // Put the copy that was there back.
+            let _ = std::fs::remove_file(&dest);
+            if moved_aside {
+                let _ = std::fs::rename(dir.join(OLD_EXE), &dest);
+            }
+            return Err(e).with_context(|| format!("copying the mixer to {}", dir.display()));
+        }
+        std::fs::write(dir.join(VERSION_FILE), crate::VERSION).context("recording the version")?;
         for file in LEGACY {
             remove(&dir.join(file));
         }
         Ok(dest)
     }
 
-    /// Records which version the installed copy is (this one, which just
-    /// installed it), so a newer mixer can tell it's out of date.
+    /// Records which version an installed copy is, so a newer mixer can
+    /// tell it's out of date.
     const VERSION_FILE: &str = "version.txt";
+
+    /// The version of the copy installed in `dir` ("unknown" if it predates
+    /// versions being recorded).
+    fn version_in(dir: &Path) -> String {
+        std::fs::read_to_string(dir.join(VERSION_FILE))
+            .map(|v| v.trim().to_owned())
+            .unwrap_or_else(|_| "unknown".into())
+    }
 
     /// The version of the copy that starts at sign-in as administrator, if
     /// there is one ("unknown" for a copy installed before versions were
@@ -539,23 +707,31 @@ mod imp {
         if !dir.join(EXE).exists() {
             return dir.join(LEGACY[0]).exists().then(|| "unknown".into());
         }
-        Some(
-            std::fs::read_to_string(dir.join(VERSION_FILE))
-                .map(|v| v.trim().to_owned())
-                .unwrap_or_else(|_| "unknown".into()),
-        )
+        Some(version_in(&dir))
     }
 
     /// Whether `exe` is the administrator copy in Program Files.
     pub fn is_admin_copy(exe: &Path) -> bool {
-        install_dir().is_ok_and(|dir| exe.parent() == Some(dir.as_path()))
+        install_dir().is_ok_and(|dir| in_dir(exe, &dir))
     }
 
-    /// After an update replaced the exe at `exe`: if that's the copy in
-    /// Program Files, record its new version.
+    /// Which installed copy this is, if any.
+    pub fn this_copy() -> Option<super::Installed> {
+        let exe = std::env::current_exe().ok()?;
+        if is_admin_copy(&exe) {
+            Some(super::Installed::Admin)
+        } else if user_dir().is_ok_and(|dir| in_dir(&exe, &dir)) {
+            Some(super::Installed::User)
+        } else {
+            None
+        }
+    }
+
+    /// After an update replaced the exe at `exe`: if that's an installed
+    /// copy, record its new version.
     pub fn updated_in_place(exe: &Path, version: &str) {
-        if is_admin_copy(exe)
-            && let Ok(dir) = install_dir()
+        if this_copy().is_some()
+            && let Some(dir) = exe.parent()
         {
             let _ = std::fs::write(dir.join(VERSION_FILE), version);
         }
@@ -596,7 +772,6 @@ mod imp {
         }
         std::fs::create_dir_all(&dir).context("creating the Program Files folder")?;
         let exe = install(&dir)?;
-        std::fs::write(dir.join(VERSION_FILE), crate::VERSION).context("recording the version")?;
         let xml = super::admin_task_xml(&exe.display().to_string(), user);
         // schtasks wants the definition as UTF-16 with a byte order mark. It
         // goes in the install folder, which only administrators can change.
@@ -645,6 +820,16 @@ mod imp {
         false
     }
 
+    pub fn this_copy() -> Option<super::Installed> {
+        None
+    }
+
+    pub fn remove_user_copy() {}
+
+    pub fn start_installed(_copy: super::Installed) -> anyhow::Result<()> {
+        anyhow::bail!("start with Windows is only available on Windows")
+    }
+
     pub fn browse(_folders: bool) -> anyhow::Result<Vec<String>> {
         anyhow::bail!("browsing is only available on Windows: type or paste the path instead")
     }
@@ -676,6 +861,44 @@ pub use imp::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hands_over_to_the_copy_start_with_windows_runs() {
+        use Installed::{Admin, User};
+        assert_eq!(hand_over_to(false, false, None, false, false), None, "off");
+        assert_eq!(hand_over_to(true, false, None, false, false), Some(User));
+        assert_eq!(
+            hand_over_to(true, false, Some(User), false, false),
+            None,
+            "is it"
+        );
+        assert_eq!(hand_over_to(true, true, None, false, false), Some(Admin));
+        assert_eq!(hand_over_to(true, true, None, false, true), Some(Admin));
+        assert_eq!(
+            hand_over_to(true, true, Some(User), false, false),
+            Some(Admin)
+        );
+        assert_eq!(
+            hand_over_to(true, true, Some(Admin), false, true),
+            None,
+            "is it"
+        );
+        assert_eq!(
+            hand_over_to(true, true, None, true, false),
+            None,
+            "stays to offer the update"
+        );
+        assert_eq!(
+            hand_over_to(true, false, None, false, true),
+            None,
+            "run as administrator by hand"
+        );
+        assert_eq!(
+            hand_over_to(true, false, Some(Admin), false, true),
+            None,
+            "as Administrator turned off: from the next sign-in"
+        );
+    }
 
     #[test]
     fn admin_task_runs_elevated_at_sign_in_without_limits() {

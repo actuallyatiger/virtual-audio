@@ -509,23 +509,33 @@ fn old_path(exe: &Path) -> PathBuf {
 /// Deletes the exe an update moved aside, once the copy running it has
 /// quit (it may still be on its way out).
 pub fn clean_up() {
-    let Ok(exe) = std::env::current_exe() else {
-        return;
-    };
-    let old = old_path(&exe);
-    if !old.exists() {
-        return;
+    if let Some(old) = old_exe() {
+        let _ = std::thread::Builder::new()
+            .name("old exe".into())
+            .spawn(move || remove_old(&old, 60));
     }
-    let _ = std::thread::Builder::new()
-        .name("old exe".into())
-        .spawn(move || {
-            for _ in 0..60 {
-                if std::fs::remove_file(&old).is_ok() || !old.exists() {
-                    return;
-                }
-                std::thread::sleep(Duration::from_millis(500));
-            }
-        });
+}
+
+/// [`clean_up`], waiting for it (up to 5 s), for a copy that's about to
+/// quit.
+pub fn clean_up_now() {
+    if let Some(old) = old_exe() {
+        remove_old(&old, 10);
+    }
+}
+
+fn old_exe() -> Option<PathBuf> {
+    let old = old_path(&std::env::current_exe().ok()?);
+    old.exists().then_some(old)
+}
+
+fn remove_old(old: &Path, tries: u32) {
+    for _ in 0..tries {
+        if std::fs::remove_file(old).is_ok() || !old.exists() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
 }
 
 /// On start, before anything else: installs a staged update and starts it.
