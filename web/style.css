@@ -387,6 +387,20 @@ button.icon.round { width: 40px; height: 40px; border-radius: 50%; }
   .hotkey-row .keys { grid-column: 1 / -1; }
 }
 
+.banner.update {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.banner-actions { display: flex; align-items: center; gap: 12px; }
+.update-text { display: grid; min-width: 0; }
+.update-text .hint:empty { display: none; }
+.update-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+#update-status, #update-banner-detail { min-width: 0; overflow-wrap: anywhere; }
+#update-mode { margin: 4px 0 10px; }
+.update-sub { margin-left: 22px; }
+#update-btn[aria-disabled="true"] { opacity: 0.6; cursor: default; }
+
 .banner.bad {
   background: color-mix(in srgb, var(--bad) 12%, var(--panel));
   border-color: color-mix(in srgb, var(--bad) 45%, transparent);

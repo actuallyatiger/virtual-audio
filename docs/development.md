@@ -34,6 +34,9 @@ cargo clippy --all-targets --target x86_64-pc-windows-gnu -- -D warnings  # the 
 cargo test
 ```
 
+`cargo test -- --ignored` also runs the tests that need the internet (the
+update check against GitHub).
+
 ## Releases
 
 Versions follow [SemVer](https://semver.org) and come from the
@@ -46,8 +49,11 @@ Versions follow [SemVer](https://semver.org) and come from the
    `CHANGELOG.md`. A `feat` raises the minor version (0.1 → 0.2) and a
    `fix` the patch; breaking changes raise the major once past 1.0.
 2. Merging that PR tags the version (`v0.2.0`) and drafts a GitHub Release
-   with the changelog. The Windows `virtual-audio-mixer.exe` is built and
-   attached, and then the release is published.
+   with the changelog. The Windows `virtual-audio-mixer.exe` is built,
+   signed with minisign (the `MINISIGN_SECRET_KEY` secret, plus
+   `MINISIGN_PASSWORD` if the key has one; the signature is appended to the
+   exe) and attached, and then the release is published. Installed copies
+   update themselves from it (see [architecture](architecture.md#updates)).
 
 The app shows its version in the tray menu and at the bottom of Help, and
 `GET /api/state` reports it as `version`. For release-please to open its PR,

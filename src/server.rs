@@ -92,6 +92,9 @@ pub fn router(engine: Arc<Engine>, port: u16, quit: Arc<dyn Fn() + Send + Sync>)
         .route("/api/sounds/{id}/preview", post(preview_sound))
         .route("/api/sounds/{id}/waveform", get(sound_waveform))
         .route("/api/quit", post(quit_app))
+        .route("/api/update/check", post(check_for_update))
+        .route("/api/update/download", post(download_update))
+        .route("/api/update/install", post(install_update))
         .route("/ws", get(ws))
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app)
@@ -179,6 +182,8 @@ fn full_state(engine: &Engine) -> serde_json::Value {
     v["platform_supported"] = json!(PLATFORM_SUPPORTED);
     v["theme"] = json!(engine.theme());
     v["version"] = json!(crate::VERSION);
+    v["update"] = json!(engine.updater.view());
+    v["updates"] = json!(engine.update_mode());
     let copy = platform::admin_copy_version();
     v["admin_copy_outdated"] = json!(admin_copy_outdated(copy.as_deref()));
     v["admin_copy_version"] = json!(copy);
@@ -437,6 +442,8 @@ struct Settings {
     /// Start with Windows as administrator (the elevated sign-in task).
     autostart_admin: Option<bool>,
     theme: Option<Theme>,
+    /// How updates are looked for.
+    updates: Option<crate::config::UpdateMode>,
 }
 
 async fn set_settings(State(app): State<App>, Json(body): Json<Settings>) -> ApiResult {
@@ -466,7 +473,30 @@ async fn set_settings(State(app): State<App>, Json(body): Json<Settings>) -> Api
     if let Some(theme) = body.theme {
         app.engine.set_theme(theme);
     }
+    if let Some(mode) = body.updates {
+        app.engine.set_update_mode(mode);
+    }
     ok()
+}
+
+async fn check_for_update(State(app): State<App>) -> ApiResult {
+    app.engine.updater.check_now();
+    ok()
+}
+
+async fn download_update(State(app): State<App>) -> ApiResult {
+    app.engine.updater.download_now();
+    ok()
+}
+
+/// Swaps in the downloaded update and starts it; this copy then quits, and
+/// the new one takes over the port.
+async fn install_update(State(app): State<App>) -> ApiResult {
+    blocking(&app, StatusCode::INTERNAL_SERVER_ERROR, |e| {
+        e.updater.install_and_launch()
+    })
+    .await?;
+    quit_app(State(app)).await
 }
 
 async fn quit_app(State(app): State<App>) -> ApiResult {

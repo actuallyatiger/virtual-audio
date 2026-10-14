@@ -103,6 +103,12 @@ It runs as a small tray app and is controlled from a web page served on
   administrator too. When you open a newer version, it offers to close
   the older one that's running, and **Setup check** then offers to update
   that copy. It needs your account to be an administrator.
+- **Updates itself**: new versions download in the background and are
+  checked to be genuine (signed) releases. **Restart to update** in the bar
+  at the top (or the tray menu) installs one now; otherwise it's installed
+  the next time the mixer starts. In Help → Updates you can choose to be
+  told first, or not to check at all.
+  The first version with updates, 0.2, has to be downloaded by hand.
 - Settings are saved to `%APPDATA%\VirtualAudioMixer\config.json`.
 
 ## Requirements
@@ -149,12 +155,14 @@ into Explorer's address bar, or use the tray's **Open log file**):
 | `config.<timestamp>.json.bad` | A `config.json` that could not be read. It is moved aside and the app starts with defaults, so you can repair it. If it can't be moved aside, the app doesn't start rather than overwrite it. |
 | `log.txt` | This run's log: every source and output it opens, errors, and crashes. |
 | `log.previous.txt` | The previous run's log. If the app vanished, look here. |
+| `update\` | A downloaded update waiting to be installed. (The copy that starts as administrator keeps its own in its Program Files folder.) |
 
-The app understands two command-line flags:
+The app understands these command-line flags:
 
 - `--background`: start without opening the browser. Start with Windows uses
   this.
 - `--verbose`: log extra debug detail.
+- `--replacing`: used by updates: wait for the copy being replaced to quit.
 
 **Listen says "Your Windows default output is …, which the mix already goes
 to"**: Listen plays on the Windows default output, so that must be your

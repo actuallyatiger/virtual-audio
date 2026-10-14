@@ -16,14 +16,17 @@ Releases are automated by release-please (`.github/workflows/release.yml`,
    `CHANGELOG.md`.
 2. **Merging that PR is the release.** release-please tags `vx.y.z` and
    makes a draft GitHub Release with that changelog section. The workflow's
-   Windows job builds `virtual-audio-mixer.exe`, and the publish job attaches it
-   and publishes the release, so a published release always has the exe.
+   Windows job builds `virtual-audio-mixer.exe`, and the publish job signs
+   it (appending the signature to the exe, which installed copies check
+   before updating themselves), attaches it and publishes the release, so a
+   published release always has the signed exe.
 3. `releases/latest/download/virtual-audio-mixer.exe` always points at the newest,
    and the README links there.
 
 To cut a release: check the release PR's changelog reads well, and merge it
 (rebase or merge both work). Then check the Release workflow run went green
-and the release has `virtual-audio-mixer.exe` attached.
+and the release has `virtual-audio-mixer.exe` attached. A signed exe ends
+in `VAMSIG01` (without the signature, installed copies won't update to it).
 
 ## Versions
 
@@ -45,6 +48,20 @@ and the release has `virtual-audio-mixer.exe` attached.
   Opening a newer exe while an older copy runs offers to close the old one.
 
 ## Fixing things
+
+- **The Sign step fails**: the `MINISIGN_SECRET_KEY` repository secret (the
+  whole `minisign -G` secret key file, both lines) is missing or wrong, or
+  the key has a password and `MINISIGN_PASSWORD` isn't set. Never publish
+  without the signature: installed copies only take signed updates.
+- **Replacing the signing key** (installed copies only trust the public key
+  built into them, `update::PUBLIC_KEY`):
+  1. Make the new pair with `minisign -G`, and keep the old secret in place.
+  2. Release a version whose `PUBLIC_KEY` is the new key, still signed with
+     the old one, and let copies update to it.
+  3. Only then put the new secret key in `MINISIGN_SECRET_KEY` (and
+     `MINISIGN_PASSWORD`). Releases from now on are signed with it.
+  If the old secret key is lost, installed copies can't be updated: everyone
+  has to download the next version by hand.
 
 - **No release PR appears**: the repository must allow it under
   **Settings → Actions → General → Workflow permissions** ("Allow GitHub Actions

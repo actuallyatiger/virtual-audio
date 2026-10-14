@@ -31,6 +31,14 @@
     </div>
   </header>
 
+  <div id="update-banner" class="banner update" role="status" hidden>
+    <span class="update-text"><span id="update-banner-text"></span><span id="update-banner-detail" class="hint small"></span></span>
+    <span class="banner-actions">
+      <a id="update-notes" href="#" target="_blank" rel="noreferrer">What's new</a>
+      <button type="button" id="update-btn" class="primary small"></button>
+    </span>
+  </div>
+
   <div id="setup-banner" class="banner bad" role="status" hidden>
     <span id="setup-banner-text"></span>
     <button type="button" class="link" id="setup-banner-open">Review setup</button>
@@ -356,6 +364,7 @@
         <a href="#help-music">Music</a>
         <a href="#help-hotkeys">Hotkeys</a>
         <a href="#help-trouble">Troubleshooting</a>
+        <a href="#help-updates">Updates</a>
       </nav>
       <div class="help-body">
         <section id="help-start">
@@ -452,6 +461,16 @@
             <li><b>Others say I'm quiet</b>: turn on <b>Automatic level</b> in your mic's ⚙ (see <a href="#help-mic">Mic processing</a>). Voice chat apps' own gain control, which normally turns a quiet mic up, is off with the settings above. Also ask them to check your volume on their side (in Discord, right-click your name → <i>User Volume</i>), which they may have turned down for loud sounds.</li>
           </ul>
           <p>The app keeps its files in <code>%APPDATA%\VirtualAudioMixer</code>: <code>config.json</code> (your settings), <code>sounds\</code>, and <code>log.txt</code> (this run) and <code>log.previous.txt</code> (the run before), which the tray menu's <b>Open log file</b> opens. A <code>config.json</code> that can't be read is moved aside as <code>config.&lt;time&gt;.json.bad</code>.</p>
+        </section>
+        <section id="help-updates">
+          <h3>Updates</h3>
+          <p class="update-status"><span id="update-status"></span> <button type="button" id="update-check" class="small">Check now</button></p>
+          <div id="update-mode">
+            <label class="check"><input type="checkbox" id="update-auto-check"> Check automatically</label>
+            <label class="check update-sub" id="update-auto-install-wrap"><input type="checkbox" id="update-auto-install" checked> Download and install automatically</label>
+          </div>
+          <p>The mixer checks when it starts and every few hours, by asking GitHub for the latest version number. A download is only kept if it's a genuine release. When one is ready, a bar at the top offers <b>Restart to update</b>, which takes a few seconds. If you don't, it's installed the next time the mixer starts. Without automatic downloads, the bar offers the download instead.</p>
+          <p>If you use <b>Start with Windows</b> → <b>as Administrator</b>, that copy updates itself too.</p>
         </section>
         <p class="hint small"><span id="help-version">Virtual Audio Mixer</span> · <a href="https://github.com/actuallyatiger/virtual-audio/releases" target="_blank" rel="noreferrer">Releases and what's new</a></p>
       </div>

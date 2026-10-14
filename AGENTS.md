@@ -23,6 +23,7 @@ talks to it over JSON and a WebSocket. See
 | Windows audio (unsafe COM) / demo backend | `src/backend/wasapi.rs` / `src/backend/dummy.rs` |
 | HTTP API and WebSocket | `src/server.rs` |
 | Hotkeys, tray, autostart and elevation | `src/hotkeys.rs`, `src/tray.rs`, `src/platform.rs` |
+| Updates (signed releases) | `src/update.rs` |
 | Config file (`%APPDATA%\VirtualAudioMixer\config.json`) | `src/config.rs` |
 | Web UI | `web/index.html`, `web/app.js`, `web/style.css` |
 
