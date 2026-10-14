@@ -107,7 +107,9 @@ It runs as a small tray app and is controlled from a web page served on
   as administrator would let any program that can replace it run as
   administrator too. Turning it on switches to that copy straight away.
   When you open another version, it offers to close the one that's
-  running, and **Setup check** then offers to update that copy. It needs
+  running, then to make it the copy that starts as administrator (one
+  Windows prompt), and switches to that copy so the file you opened can be
+  deleted. Say no, and **Setup check** offers it later. It needs
   your account to be an administrator.
 - **Updates itself**: new versions download in the background and are
   checked to be genuine (signed) releases. **Restart to update** in the bar

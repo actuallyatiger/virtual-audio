@@ -71,8 +71,10 @@ over an older copy for this account and starts that instead
 it never hands over again). The started copy must answer on the port within
 15 s, or this one carries on (or, from Settings, starts itself again).
 
-It stays put if the administrator copy is older or missing (Setup check offers
-to update it, which needs the newer copy running), or if it runs as
+If the administrator copy is older or missing, a copy opened by hand first
+asks to update it (one UAC prompt) and then hands over. Declined, or in the
+background, it stays put (Setup check offers the update, which needs the newer
+copy running). It also stays put if it runs as
 administrator and the setting isn't as Administrator: an elevated copy never
 starts, deletes or writes through a link into the copy for the account, whose
 folder the user controls (turning as Administrator off takes effect from the

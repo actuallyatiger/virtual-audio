@@ -119,9 +119,28 @@ fn wait_for_mixer(port: u16, seconds: u32) -> bool {
 }
 
 /// The installed copy Start with Windows runs, if it should run in place of
-/// this one. A copy for this account is installed, or updated, first.
-fn installed_to_run(admin: bool) -> Option<platform::Installed> {
-    let outdated = platform::admin_copy_version().is_none_or(|v| replaces(&v));
+/// this one. A copy for this account is installed, or updated, first; the
+/// administrator copy too, if the user agrees to Windows' prompt (opened by
+/// hand, not in the `background`).
+fn installed_to_run(admin: bool, background: bool) -> Option<platform::Installed> {
+    let mut outdated = platform::admin_copy_version().is_none_or(|v| replaces(&v));
+    // Otherwise this copy (often a download) keeps running in its place,
+    // and its file can't be deleted.
+    if admin
+        && outdated
+        && !background
+        && platform::this_copy() != Some(platform::Installed::Admin)
+        && platform::ask(&format!(
+            "Start with Windows (as administrator) runs another version. Make it this one \
+             ({})? Windows will ask for permission.",
+            build()
+        ))
+    {
+        match platform::set_admin_autostart(true) {
+            Ok(()) => outdated = false,
+            Err(e) => tracing::warn!("couldn't update the administrator copy: {e:#}"),
+        }
+    }
     let autostart = admin || platform::autostart_enabled();
     let copy = platform::hand_over_to(
         autostart,
@@ -252,7 +271,10 @@ fn main() -> anyhow::Result<()> {
     // Start with Windows runs an installed copy. Opening another one (such
     // as the download) brings it up to date and starts it instead.
     let admin = matches!(&loaded, Ok(Some(config)) if config.autostart_admin);
-    let listener = match installed_to_run(admin).filter(|_| !handed_over) {
+    let listener = match (!handed_over)
+        .then(|| installed_to_run(admin, background))
+        .flatten()
+    {
         None => {
             if !platform::autostart_enabled() {
                 platform::remove_user_copy();
