@@ -89,10 +89,12 @@ It runs as a small tray app and is controlled from a web page served on
   don't swallow the key, so it still reaches the game you're in. While an
   app running as administrator is focused (some games do this), Windows
   hides its keys from other apps, so run the mixer as administrator too
-  (Start with Windows → as Administrator).
-- **Setup check** and **Help** in the top bar, and an ⓘ next to each
-  section explaining it. The theme follows your system's light or dark
-  setting, or the top bar's theme button picks one.
+  (Settings → Start with Windows → as Administrator).
+- **Setup check**, **Help** and **Settings** in the top bar, and an ⓘ next
+  to each section explaining it. The theme follows your system's light or
+  dark setting, or Settings picks one.
+- **Settings** has Start with Windows, the theme, the soundboard's even
+  out volumes, and updates.
 - Start with Windows (runs in the background, tray icon only), optionally
   **as Administrator** so hotkeys also work in games that run as
   administrator. That uses a Task Scheduler task with highest privileges,
@@ -106,8 +108,8 @@ It runs as a small tray app and is controlled from a web page served on
 - **Updates itself**: new versions download in the background and are
   checked to be genuine (signed) releases. **Restart to update** in the bar
   at the top (or the tray menu) installs one now; otherwise it's installed
-  the next time the mixer starts. In Help → Updates you can choose to be
-  told first, or not to check at all.
+  the next time the mixer starts. In Settings → Updates you can choose to
+  be told first, or not to check at all.
   The first version with updates, 0.2, has to be downloaded by hand.
 - Settings are saved to `%APPDATA%\VirtualAudioMixer\config.json`.
 

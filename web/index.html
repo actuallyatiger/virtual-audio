@@ -17,16 +17,7 @@
     <div class="topbar-actions">
       <button id="setup-btn" class="ghost setup-btn" title="Check that everything is set up"><span class="dot" aria-hidden="true"></span>Setup check</button>
       <button id="help-btn" class="ghost">Help</button>
-      <button id="theme-btn" type="button" class="ghost icon"></button>
-      <label class="switch" id="autostart-wrap" title="Launch in the background when you sign in">
-        <input type="checkbox" id="autostart">
-        <span>Start with Windows</span>
-      </label>
-      <label class="switch" id="autostart-admin-wrap" hidden
-        title="Start as administrator, so hotkeys also work while games running as administrator are focused. Windows asks for permission once.">
-        <input type="checkbox" id="autostart-admin">
-        <span id="autostart-admin-label">as Administrator</span>
-      </label>
+      <button id="settings-btn" class="ghost with-icon"><span data-icon="cog" aria-hidden="true"></span>Settings</button>
       <button id="quit" class="ghost danger" title="Stop the mixer and close the tray app">Quit</button>
     </div>
   </header>
@@ -99,7 +90,7 @@
         <ul>
           <li>Click a sound to play it into the mix. Clicking it again restarts it.</li>
           <li>Add MP3, WAV, OGG, FLAC or M4A files up to 60 seconds long with <b>Add sounds</b>, or drop them on the soundboard.</li>
-          <li>Sounds are evened out to a similar volume, a little below your voice, unless you turn that off in a sound's ⚙. A sound's ⚙ renames it, sets its volume, trims it or deletes it. Drag sounds to reorder them, or focus one and press Alt+← or Alt+→.</li>
+          <li>Sounds are evened out to a similar volume, a little below your voice, unless you turn that off in Settings. A sound's ⚙ renames it, sets its volume, trims it or deletes it. Drag sounds to reorder them, or focus one and press Alt+← or Alt+→.</li>
           <li><b>Hear sounds</b> also plays them on your Windows default output at <b>Your volume</b>, so you hear them without hearing your own voice.</li>
         </ul>
         <button type="button" class="link" data-help="help-soundboard">More in Help</button>
@@ -243,10 +234,7 @@
         <input type="range" id="sound-gain" class="gain" min="-60" max="12" step="0.5">
         <button type="button" id="sound-gain-value" class="gain-value" title="Click to type a value"></button>
       </div>
-      <div class="even">
-        <label class="check"><input type="checkbox" id="even-sounds"> Even out volumes (all sounds)</label>
-        <p class="hint small" id="sound-even-hint"></p>
-      </div>
+      <p class="hint small" id="sound-even-hint"></p>
       <div class="trim" id="trim">
         <div class="trim-head">
           <span class="field-label">Trim</span>
@@ -349,6 +337,49 @@
     </div>
   </dialog>
 
+  <dialog id="settings-dialog" aria-labelledby="settings-h">
+    <form method="dialog" class="dialog-body settings">
+      <h2 id="settings-h">Settings</h2>
+      <section aria-labelledby="set-start-h">
+        <h3 id="set-start-h">Start with Windows</h3>
+        <div id="autostart-wrap">
+          <label class="check"><input type="checkbox" id="autostart"> Start with Windows</label>
+          <p class="hint small">Starts in the background when you sign in, with just the tray icon.</p>
+          <div class="settings-sub" id="autostart-admin-wrap" hidden>
+            <label class="check"><input type="checkbox" id="autostart-admin"> <span id="autostart-admin-label">as Administrator</span></label>
+            <p class="hint small">So hotkeys also work while games running as administrator are focused. Windows asks for permission once.</p>
+          </div>
+        </div>
+        <p class="hint small" id="autostart-unsupported" hidden>Only in the Windows app.</p>
+      </section>
+      <section aria-labelledby="set-look-h">
+        <h3 id="set-look-h">Theme</h3>
+        <fieldset class="gate-mode" id="theme-choice" aria-labelledby="set-look-h">
+          <label class="check"><input type="radio" name="theme" value="system"> Automatic, like Windows</label>
+          <label class="check"><input type="radio" name="theme" value="light"> Light</label>
+          <label class="check"><input type="radio" name="theme" value="dark"> Dark</label>
+        </fieldset>
+      </section>
+      <section aria-labelledby="set-sb-h">
+        <h3 id="set-sb-h">Soundboard</h3>
+        <label class="check"><input type="checkbox" id="even-sounds"> Even out volumes</label>
+        <p class="hint small">Turns each sound up or down to a similar level, a little below your voice. A sound's own volume applies on top.</p>
+      </section>
+      <section aria-labelledby="set-up-h">
+        <h3 id="set-up-h">Updates</h3>
+        <p class="update-status"><span id="update-status"></span> <button type="button" id="update-check" class="small">Check now</button></p>
+        <div id="update-mode">
+          <label class="check"><input type="checkbox" id="update-auto-check"> Check automatically</label>
+          <label class="check settings-sub" id="update-auto-install-wrap"><input type="checkbox" id="update-auto-install" checked> Download and install automatically</label>
+        </div>
+        <p class="hint small"><span id="settings-version">Virtual Audio Mixer</span> · <a href="https://github.com/actuallyatiger/virtual-audio/releases" target="_blank" rel="noreferrer">What's new</a></p>
+      </section>
+      <div class="dialog-actions">
+        <button id="settings-done" class="primary">Done</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="help-dialog" class="wide" aria-labelledby="help-h">
     <div class="dialog-body">
       <div class="help-head">
@@ -422,7 +453,7 @@
           <ul>
             <li>Add MP3, WAV, OGG, FLAC or M4A files (up to 60 seconds and 20 MB each, 64 sounds) with <b>Add sounds</b> or by dropping them on the soundboard.</li>
             <li>Click a sound to play it; clicking it again restarts it. <b>Stop all</b> stops everything. A sound's ⚙ renames it, sets its own volume or deletes it.</li>
-            <li><b>Even out volumes</b> (in a sound's ⚙, on by default) measures how loud each sound is, the way broadcasters do, and turns it up or down to a similar level a little below a speaking voice, so one loud clip doesn't blast your listeners (who might turn you down for it, voice and all). It never turns a sound up so far that it distorts. Each sound's own volume applies on top, and trimming a sound measures just the part that plays.</li>
+            <li><b>Even out volumes</b> (in <b>Settings</b>, on by default) measures how loud each sound is, the way broadcasters do, and turns it up or down to a similar level a little below a speaking voice, so one loud clip doesn't blast your listeners (who might turn you down for it, voice and all). It never turns a sound up so far that it distorts. Each sound's own volume applies on top, and trimming a sound measures just the part that plays.</li>
             <li>Drag sounds to reorder them, or focus one and press Alt+← or Alt+→.</li>
             <li>To trim a sound, open its ⚙ and drag the edges of its waveform, or type times. <b>Trim silence</b> cuts quiet bits off both ends, fades smooth the start and end, and <b>Preview</b> plays it only to you (through Hear sounds). The file isn't changed, so <b>Reset</b> restores it.</li>
             <li>The soundboard is also a card in the mixer, with its own volume, mute and hotkeys. If you remove that card, the soundboard offers to add it back.</li>
@@ -444,7 +475,7 @@
           <h3>Hotkeys</h3>
           <ul>
             <li>Hotkeys work while other apps are focused, such as a game, and don't block the key from reaching that app.</li>
-            <li>Windows hides keys typed into an app running as administrator from apps that aren't, so hotkeys stop working while such an app is focused (some games and their launchers run this way, and voice chat apps' hotkeys have the same limit). To fix it, turn on <b>Start with Windows</b> → <b>as Administrator</b> (Windows asks for permission once, then the mixer starts elevated at every sign-in without asking; it runs a copy in Program Files, which <b>Setup check</b> offers to update after you open a newer version), or right-click <code>virtual-audio-mixer.exe</code> → <b>Run as administrator</b>. Some anti-cheat software blocks other apps' hotkeys regardless.</li>
+            <li>Windows hides keys typed into an app running as administrator from apps that aren't, so hotkeys stop working while such an app is focused (some games and their launchers run this way, and voice chat apps' hotkeys have the same limit). To fix it, turn on <b>Settings</b> → <b>Start with Windows</b> → <b>as Administrator</b> (Windows asks for permission once, then the mixer starts elevated at every sign-in without asking; it runs a copy in Program Files, which <b>Setup check</b> offers to update after you open a newer version), or right-click <code>virtual-audio-mixer.exe</code> → <b>Run as administrator</b>. Some anti-cheat software blocks other apps' hotkeys regardless.</li>
             <li>Actions: <b>toggle mute</b>, <b>push to talk</b> (silent unless held), <b>push to mute</b> (silent while held), <b>play sound</b>, <b>stop all sounds</b>, and music <b>play/pause</b>, <b>next</b> and <b>previous</b>.</li>
             <li>Click a hotkey's keys to record new ones. Keyboard combinations and the mouse side buttons (Mouse4, Mouse5) both work.</li>
           </ul>
@@ -464,11 +495,7 @@
         </section>
         <section id="help-updates">
           <h3>Updates</h3>
-          <p class="update-status"><span id="update-status"></span> <button type="button" id="update-check" class="small">Check now</button></p>
-          <div id="update-mode">
-            <label class="check"><input type="checkbox" id="update-auto-check"> Check automatically</label>
-            <label class="check update-sub" id="update-auto-install-wrap"><input type="checkbox" id="update-auto-install" checked> Download and install automatically</label>
-          </div>
+          <p>Choose how in <b>Settings</b> → <b>Updates</b>, where <b>Check now</b> looks straight away.</p>
           <p>The mixer checks when it starts and every few hours, by asking GitHub for the latest version number. A download is only kept if it's a genuine release. When one is ready, a bar at the top offers <b>Restart to update</b>, which takes a few seconds. If you don't, it's installed the next time the mixer starts. Without automatic downloads, the bar offers the download instead.</p>
           <p>If you use <b>Start with Windows</b> → <b>as Administrator</b>, that copy updates itself too.</p>
         </section>
