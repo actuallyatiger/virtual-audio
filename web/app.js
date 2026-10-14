@@ -169,8 +169,8 @@ function render(next) {
   $("#autostart-admin-wrap").hidden = !state.platform_supported || !state.autostart;
   if (!adminPending) $("#autostart-admin").checked = state.autostart_admin;
   $("#elevation-note").textContent = state.elevated
-    ? "The mixer is running as administrator, so hotkeys also work while apps running as administrator are focused."
-    : "Hotkeys can't see keys while an app running as administrator (some games) is focused. Turn on Start with Windows → as Administrator, or run the mixer as administrator, to fix that.";
+    ? "Running as administrator, so hotkeys work in every app."
+    : "Not in apps running as administrator (some games). Fix: Settings → Start with Windows → as Administrator.";
   renderOutput();
   renderStrips();
   renderMicDialog();
@@ -237,7 +237,7 @@ function channelList() {
   const list = [{
     id: "master",
     name: "Master",
-    detail: "Final mix sent to the output",
+    detail: "The whole mix",
     icon: "sliders",
     gain_db: state.master.gain_db,
     muted: state.master.muted,
@@ -246,9 +246,9 @@ function channelList() {
   for (const s of state.sources) {
     const [detail, icon] = {
       app: [s.exe, "window"],
-      device: [s.device ? s.device.name : "Default microphone (follows Windows)", "mic"],
-      soundboard: ["Sounds from the soundboard below", "speaker"],
-      music: ["Music from the player below", "music"],
+      device: [s.device ? s.device.name : "Default microphone", "mic"],
+      soundboard: ["Sound effects", "speaker"],
+      music: ["Playlist", "music"],
     }[s.kind];
     list.push({ ...s, detail, icon });
   }
@@ -560,7 +560,7 @@ function updateMeters(meters) {
     state.className = `gate-state ${mic.mic_gate_open ? "open" : "closed"}`;
     const db = mic.mic_auto_level_db;
     $("#mic-auto-level-now").textContent =
-      db === undefined ? "" : Math.abs(db) < 0.5 ? "Not changing your level yet." : `Turning you ${db > 0 ? "up" : "down"} ${Math.abs(db).toFixed(1)} dB.`;
+      db === undefined ? "" : Math.abs(db) < 0.5 ? "No change yet." : `Turning you ${db > 0 ? "up" : "down"} ${Math.abs(db).toFixed(1)} dB.`;
   }
 }
 
@@ -663,21 +663,21 @@ function setupChecks() {
     run: () => api("PUT", "/api/output", { device: { id: cable.id, name: cable.name } }),
   };
   if (cable) add("ok", "Virtual cable installed", cable.name);
-  else add("error", "No virtual cable found", "Install one, such as the free VB-Audio Virtual Cable, then restart your PC.", { help: "help-start" });
+  else add("error", "No virtual cable found", "Install one, such as VB-Audio Virtual Cable, then restart your PC.", { help: "help-start" });
 
   const out = state.output;
   if (!out) add("error", "The mix isn't going anywhere", "Choose where to send it in Output.", { fix: useCable, help: "help-start" });
   else if (state.output_status.state === "error") add("error", `Can't play the mix on ${out.name}`, state.output_status.message, { help: "help-trouble" });
-  else if (!isCable(out.name)) add("warn", `The mix goes to ${out.name}`, "That isn't a virtual cable, so other apps can't use the mix as a microphone.", { fix: useCable, help: "help-start" });
+  else if (!isCable(out.name)) add("warn", `The mix goes to ${out.name}`, "It isn't a virtual cable, so other apps can't use it as a mic.", { fix: useCable, help: "help-start" });
   else add("ok", "The mix goes to the virtual cable", out.name);
 
   const defOut = devices.outputs.find((d) => d.is_default);
   if (defOut && out && defOut.id === out.id) {
-    add("warn", "Your Windows default output is the cable", "Everything your PC plays goes into the mic, and you won't hear it. Set your speakers or headphones as the default output in Windows' sound settings.", { help: "help-trouble" });
+    add("warn", "Your Windows default output is the cable", "Everything your PC plays goes into the mic. Make your speakers or headphones the default in Windows' sound settings.", { help: "help-trouble" });
   }
   const defIn = devices.inputs.find((d) => d.is_default);
   if (defIn && out && feedsBack(defIn.name, out.name)) {
-    add("warn", "Your Windows default microphone is the cable", `“${defIn.name}” records the mix itself, so apps using the default microphone hear the mix, and “Default microphone” sources can't hear you. Set your real microphone as the default in Windows' sound settings.`, { help: "help-trouble" });
+    add("warn", "Your Windows default microphone is the cable", `Apps using the default mic get the mix instead of you. Make your real mic the default in Windows' sound settings.`, { help: "help-trouble" });
   }
 
   const mics = state.sources.filter((s) => s.kind === "device");
@@ -694,7 +694,7 @@ function setupChecks() {
     else if (!since) add("pending", `${m.name} is starting`, m.status.message);
     else if (now - (heardAt.get(m.id) || 0) < QUIET_MS) add("ok", `${m.name} is picking up sound`, m.status.message + (m.muted ? " (muted on its card)" : ""));
     else if (now - since < QUIET_MS) add("pending", `Listening to ${m.name}…`, "Say something.");
-    else add("warn", `No sound from ${m.name}`, "It hasn't picked anything up for 10 seconds. Check it isn't muted in Windows or on the mic itself, and that it's the right device.", { help: "help-trouble" });
+    else add("warn", `No sound from ${m.name}`, "Nothing for 10 seconds. Check it isn't muted and is the right device.", { help: "help-trouble" });
   }
   for (const s of state.sources) {
     if (s.kind !== "device" && s.status.state === "error") add("warn", `${s.name} isn't working`, s.status.message);
@@ -704,7 +704,7 @@ function setupChecks() {
   if (state.music.error) add("warn", "A music track couldn't be played", state.music.error, { help: "help-music" });
   const copy = state.admin_copy_version;
   if (state.autostart_admin && state.admin_copy_outdated) {
-    add("warn", "The administrator copy is out of date", `Start with Windows → as Administrator starts the copy in Program Files, which is ${copy === "unknown" ? "an older version" : `version ${copy}`}; this is ${state.version}. Updating it asks Windows for permission.`, {
+    add("warn", "The administrator copy is out of date", `It's ${copy === "unknown" ? "an older version" : `version ${copy}`}; this is ${state.version}. Windows asks for permission to update it.`, {
       fix: { label: "Update it", run: () => saveAutostart({ autostart: true, autostart_admin: true }) },
       help: "help-hotkeys",
     });
@@ -792,8 +792,8 @@ function renderMicDialog() {
   $("#mic-keep-in-time").checked = src.keep_in_time;
   $("#mic-threshold").hidden = $("#mic-threshold-value").hidden = $("#mic-threshold-mark").hidden = !manual;
   $("#mic-gate-hint").textContent = manual
-    ? "The meter shows your mic. Set the line just above where it sits while you're quiet."
-    : "Opens when it hears speech that's louder than the background noise. If it misses quiet speech, use a level instead.";
+    ? "Set the line just above the meter while you're quiet."
+    : "If it misses quiet speech, set a level instead.";
   if (document.activeElement !== $("#mic-threshold")) showThreshold(src.gate_db);
 }
 
@@ -909,7 +909,7 @@ async function loadApps() {
       updateAddButton();
     }
     const items = apps.map((a, i) => pickButton(a.exe, a.active ? "playing" : "idle", selections[i]));
-    list.replaceChildren(...(items.length ? items : [el("li", { className: "empty", textContent: "No apps are playing audio right now. Start playback and refresh, or type the name below." })]));
+    list.replaceChildren(...(items.length ? items : [el("li", { className: "empty", textContent: "No apps are playing audio. Play something and refresh, or type a name below." })]));
   } catch (e) {
     if (request === listRequests) list.replaceChildren(el("li", { className: "error", textContent: e.message }));
   }
@@ -970,8 +970,8 @@ function renderSounds() {
   const inMix = state.sources.some((s) => s.kind === "soundboard");
   let hint;
   if (uploading) hint = `Adding sounds… ${uploading.done} of ${uploading.total} done`;
-  else if (!state.sounds.length) hint = "No sounds yet. Add some with + Add sounds, or drop audio files here.";
-  else if (!inMix) hint = "The soundboard isn't in the mix, so nobody hears it. ";
+  else if (!state.sounds.length) hint = "No sounds yet. Add some, or drop files here.";
+  else if (!inMix) hint = "The soundboard isn't in the mix. ";
   else hint = "";
   // Only touch the hint when it changes, so a focused "Add it back" survives
   // unrelated state updates.
@@ -1018,10 +1018,10 @@ function renderSounds() {
 function showEven(sound) {
   const db = sound.even_db;
   const hint = $("#sound-even-hint");
-  if (!state.even_sounds) hint.textContent = "Even out volumes is off (in Settings).";
+  if (!state.even_sounds) hint.textContent = "Even out volumes is off.";
   else if (db === undefined || db === null) hint.textContent = "";
-  else if (Math.abs(db) < 0.5) hint.textContent = "This sound is already at about the usual level.";
-  else hint.textContent = `This sound is turned ${db > 0 ? "up" : "down"} ${Math.abs(db).toFixed(1)} dB to match, before its own volume.`;
+  else if (Math.abs(db) < 0.5) hint.textContent = "Evened out: no change.";
+  else hint.textContent = `Evened out: ${db > 0 ? "up" : "down"} ${Math.abs(db).toFixed(1)} dB.`;
 }
 
 $("#even-sounds").addEventListener("change", (e) => attempt(api("PATCH", "/api/soundboard", { even_sounds: e.target.checked })));
@@ -1036,7 +1036,7 @@ function renderHear() {
   const h = state.hear_status;
   if (state.monitor.state !== "idle") {
     status.className = "status";
-    status.textContent = "Paused while Listen is on (it includes the soundboard)";
+    status.textContent = "Paused while Listen is on";
   } else if (!state.sources.some((s) => s.kind === "soundboard")) {
     status.className = "status";
     status.textContent = "";
@@ -1500,9 +1500,9 @@ function renderMusic() {
   }
 
   let hint = "";
-  if (!m.items.length) hint = "No music yet. Add a folder or files with Add music.";
-  else if (!hasTracks) hint = "No audio files found in the folders and files you added.";
-  else if (!inMix) hint = "The music isn't in the mix, so nobody hears it. ";
+  if (!m.items.length) hint = "No music yet.";
+  else if (!hasTracks) hint = "No audio files found.";
+  else if (!inMix) hint = "The music isn't in the mix. ";
   else if (m.error) hint = `Couldn't play ${m.error}`;
   if (hint !== lastMusicHint) {
     lastMusicHint = hint;
@@ -1543,7 +1543,7 @@ function renderMusic() {
     list.replaceChildren(...m.tracks.map((t, i) => {
       const btn = el("button", { type: "button", className: "track" }, el("span", { className: "num", textContent: i + 1 }), el("span", { textContent: t }));
       btn.addEventListener("click", () => attempt(api("POST", "/api/music/control", { action: "play", track: i })));
-      const remove = el("button", { type: "button", className: "ghost icon remove", "data-icon": "close", title: "Remove from the playlist (the file stays)", "aria-label": `Remove ${t} from the playlist` });
+      const remove = el("button", { type: "button", className: "ghost icon remove", "data-icon": "close", title: "Remove from the playlist", "aria-label": `Remove ${t} from the playlist` });
       remove.addEventListener("click", () => attempt(api("POST", "/api/music/tracks/remove", { track: i, name: t })));
       return el("li", {}, btn, remove);
     }));
@@ -1634,7 +1634,7 @@ dbButtons.music.addEventListener("click", (e) =>
 // ---- the files and folders dialog
 
 $("#music-clear").addEventListener("click", () => {
-  if (!confirm("Clear the playlist? The files stay where they are.")) return;
+  if (!confirm("Clear the playlist? No files are deleted.")) return;
   attempt(api("DELETE", "/api/music/items"));
   $("#music-add").focus(); // the button hides itself
 });
@@ -1890,7 +1890,7 @@ function renderHotkeys(force = false) {
   const container = $("#hotkeys");
   const rows = hotkeyRows();
   if (!rows.length) {
-    container.replaceChildren(el("p", { className: "empty", textContent: "No hotkeys yet. Add one to mute or push-to-talk any channel, or to play a sound." }));
+    container.replaceChildren(el("p", { className: "empty", textContent: "No hotkeys yet." }));
     return;
   }
   let focusTarget = null;
