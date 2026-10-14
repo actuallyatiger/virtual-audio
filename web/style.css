@@ -443,6 +443,12 @@ dialog.wide { width: min(760px, calc(100vw - 32px)); }
 .help-body h3 { font-size: 15px; margin: 0 0 6px; }
 .help-body h4 { font-size: 13px; margin: 12px 0 4px; }
 .help-body p, .help-body ul, .help-body ol { margin: 0 0 8px; }
+.help-body li > ul { margin: 4px 0 0; color: var(--muted); }
+.help-tip {
+  padding: 8px 12px; border-radius: 8px;
+  border-left: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
 .help-body ul, .help-body ol { padding-left: 20px; }
 .help-body li + li { margin-top: 4px; }
 .help-body a { color: var(--accent); }
