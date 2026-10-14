@@ -28,7 +28,7 @@ pub fn run(
     updater: std::sync::Arc<crate::update::Updater>,
 ) -> anyhow::Result<()> {
     let title = MenuItem::new(
-        format!("Virtual Audio Mixer {}", crate::VERSION),
+        format!("Virtual Audio Mixer {}", crate::build()),
         false,
         None,
     );

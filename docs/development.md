@@ -60,6 +60,23 @@ The app shows its version in the tray menu and at the bottom of Help, and
 the repository's **Settings → Actions → General → Workflow permissions** must
 allow GitHub Actions to create pull requests.
 
+## Test builds
+
+Only the release workflow builds with `VAM_RELEASE` set. Any other build is a
+test build: its version reads like `0.2.1-dev.010e2aa` (the commit, from
+`VAM_COMMIT`, which CI sets) and it never updates itself.
+
+To try a PR on Windows, download `virtual-audio-mixer-windows-x64` from the
+**Windows release build** job's artifacts (Checks tab, needs a GitHub login)
+and open it:
+
+- If the mixer is running as another build, it asks to replace it.
+- With Start with Windows on, it installs itself over the installed copy and
+  runs from there (as Administrator, Setup check offers to install it in
+  Program Files). Whichever build was opened last is the one installed.
+- To go back, open a release: it replaces the test build the same way, and
+  updates itself from then on.
+
 ## Testing the UI
 
 The demo backend serves the real UI, so it can be driven with Playwright in a

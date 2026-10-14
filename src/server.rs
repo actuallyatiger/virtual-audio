@@ -181,7 +181,7 @@ fn full_state(engine: &Engine) -> serde_json::Value {
     v["elevated"] = json!(platform::is_elevated());
     v["platform_supported"] = json!(PLATFORM_SUPPORTED);
     v["theme"] = json!(engine.theme());
-    v["version"] = json!(crate::VERSION);
+    v["version"] = json!(crate::build());
     v["update"] = json!(engine.updater.view());
     v["updates"] = json!(engine.update_mode());
     let copy = platform::admin_copy_version();
@@ -193,7 +193,7 @@ fn full_state(engine: &Engine) -> serde_json::Value {
 /// Whether the copy in Program Files is older than this one, so starting
 /// as administrator would run an old version. Never offers a downgrade.
 fn admin_copy_outdated(copy: Option<&str>) -> bool {
-    copy.is_some_and(|copy| crate::is_older(copy, crate::VERSION))
+    copy.is_some_and(crate::replaces)
 }
 
 async fn state(State(app): State<App>) -> Json<serde_json::Value> {
@@ -471,8 +471,7 @@ async fn set_settings(State(app): State<App>, Json(body): Json<Settings>) -> Api
         if want_run_key || run_key {
             platform::set_autostart(want_run_key)?;
         }
-        let outdated =
-            platform::admin_copy_version().is_none_or(|v| crate::is_older(&v, crate::VERSION));
+        let outdated = platform::admin_copy_version().is_none_or(|v| crate::replaces(&v));
         Ok(platform::hand_over_to(
             want,
             want_admin,
@@ -608,12 +607,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_an_older_admin_copy_is_outdated() {
+    fn only_a_copy_this_build_replaces_is_outdated() {
         assert!(!admin_copy_outdated(None));
-        assert!(!admin_copy_outdated(Some(crate::VERSION)));
+        assert!(!admin_copy_outdated(Some(crate::build())));
         assert!(admin_copy_outdated(Some("unknown")));
         assert!(admin_copy_outdated(Some("0.0.1")));
-        assert!(!admin_copy_outdated(Some("999.0.0")));
     }
 
     #[test]

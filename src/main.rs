@@ -20,7 +20,35 @@ use config::{Channel, Config, DeviceRef, SourceConfig, SourceKind};
 
 /// This build's version (from Cargo.toml, which releases bump).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Whether this is a release build: the release workflow sets VAM_RELEASE.
+/// Anything else is a test build, which never updates itself.
+pub const RELEASE: bool = option_env!("VAM_RELEASE").is_some();
 use std::sync::Arc;
+
+/// This build: its version, plus "-dev" and the commit it was built from
+/// (CI sets VAM_COMMIT) for a test build, e.g. "0.2.1-dev.010e2aa".
+pub fn build() -> &'static str {
+    static BUILD: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| match (RELEASE, option_env!("VAM_COMMIT")) {
+            (true, _) => VERSION.to_owned(),
+            (false, Some(commit)) => format!("{VERSION}-dev.{commit}"),
+            (false, None) => format!("{VERSION}-dev"),
+        });
+    &BUILD
+}
+
+/// Whether an installed copy of build `installed` should give way to this
+/// one (see [`replaces_as`]).
+pub fn replaces(installed: &str) -> bool {
+    replaces_as(build(), RELEASE, installed)
+}
+
+/// Whether `this` build replaces an installed `installed` one: a release
+/// replaces older versions and test builds (which count as older); a test
+/// build replaces anything but itself, so whichever was opened last runs.
+fn replaces_as(this: &str, release: bool, installed: &str) -> bool {
+    installed != this && (!release || is_older(installed, this))
+}
 
 /// Whether version `a` is older than `b`. Copies from before versions
 /// ("unknown") count as older.
@@ -79,7 +107,7 @@ fn wait_for_mixer(port: u16, seconds: u32) -> bool {
 /// The installed copy Start with Windows runs, if it should run in place of
 /// this one. A copy for this account is installed, or updated, first.
 fn installed_to_run(admin: bool) -> Option<platform::Installed> {
-    let outdated = platform::admin_copy_version().is_none_or(|v| is_older(&v, VERSION));
+    let outdated = platform::admin_copy_version().is_none_or(|v| replaces(&v));
     let autostart = admin || platform::autostart_enabled();
     let copy = platform::hand_over_to(
         autostart,
@@ -159,13 +187,14 @@ fn main() -> anyhow::Result<()> {
         }
         Err(_) if background => return Ok(()),
         Err(_) => match running_version(port) {
-            // An older copy (often the administrator one starting at sign-in)
-            // would otherwise keep running and hide this one.
+            // Another build (an older one starting at sign-in, or a test
+            // build) would otherwise keep running and hide this one.
             Some(running)
-                if is_older(&running, VERSION)
+                if running != build()
                     && platform::ask(&format!(
-                        "An older Virtual Audio Mixer ({running}) is running. \
-                         Close it and start this version ({VERSION})?"
+                        "Virtual Audio Mixer {running} is running. \
+                         Close it and start this one ({})?",
+                        build()
                     )) =>
             {
                 take_over(port)?
@@ -191,7 +220,7 @@ fn main() -> anyhow::Result<()> {
     init_logging(verbose);
     tracing::info!(
         "Virtual Audio Mixer {} starting, args: {:?}",
-        VERSION,
+        build(),
         std::env::args().skip(1).collect::<Vec<_>>()
     );
     if let Some(e) = update_failed {
@@ -417,6 +446,23 @@ mod tests {
         assert!(!is_older("0.3.0", "0.2.0"));
         assert!(!is_older("0.2.0", "0.2.0"));
         assert!(is_older("unknown", "0.1.0"));
+        assert!(is_older("0.2.1-dev.010e2aa", "0.2.1"), "test builds");
+    }
+
+    #[test]
+    fn the_build_opened_last_replaces_an_installed_copy() {
+        // A release: only an older version, or a test build.
+        assert!(replaces_as("0.3.0", true, "0.2.1"));
+        assert!(replaces_as("0.3.0", true, "0.3.0-dev.abc1234"));
+        assert!(replaces_as("0.3.0", true, "unknown"));
+        assert!(!replaces_as("0.3.0", true, "0.3.0"));
+        assert!(!replaces_as("0.3.0", true, "0.4.0"), "never a downgrade");
+        // A test build: anything but itself.
+        let dev = "0.3.0-dev.abc1234";
+        assert!(replaces_as(dev, false, "0.3.0"));
+        assert!(replaces_as(dev, false, "0.4.0"));
+        assert!(replaces_as(dev, false, "0.3.0-dev.def5678"));
+        assert!(!replaces_as(dev, false, dev));
     }
 
     #[test]
