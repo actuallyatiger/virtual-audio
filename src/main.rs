@@ -84,14 +84,28 @@ fn running_version(port: u16) -> Option<String> {
 
 /// Asks the copy running on `port` to quit, and takes the port once it has.
 fn take_over(port: u16) -> anyhow::Result<std::net::TcpListener> {
-    use std::io::Write;
+    ask_to_quit(port)?;
+    wait_for_port(port, 10).map_err(|_| anyhow::anyhow!("the running copy didn't close"))
+}
+
+/// Asks the copy running on `port` to quit. Waits for the answer: the
+/// server drops a request whose connection closes before it's answered.
+fn ask_to_quit(port: u16) -> anyhow::Result<()> {
+    use std::io::{Read, Write};
     let mut stream = std::net::TcpStream::connect(("127.0.0.1", port))?;
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
     write!(
         stream,
         "POST /api/quit HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
     )?;
-    drop(stream);
-    wait_for_port(port, 10).map_err(|_| anyhow::anyhow!("the running copy didn't close"))
+    let mut response = String::new();
+    stream.read_to_string(&mut response)?;
+    let status = response.lines().next().unwrap_or_default();
+    anyhow::ensure!(
+        status.starts_with("HTTP/1.1 2"),
+        "the running copy answered {status:?}"
+    );
+    Ok(())
 }
 
 /// Waits up to `seconds` for a mixer to answer on `port`.
@@ -197,7 +211,16 @@ fn main() -> anyhow::Result<()> {
                         build()
                     )) =>
             {
-                take_over(port)?
+                match take_over(port) {
+                    Ok(listener) => listener,
+                    Err(e) => {
+                        platform::tell(&format!(
+                            "Couldn't close the running Virtual Audio Mixer: {e:#}. \
+                             Quit it from its tray icon and open this one again."
+                        ));
+                        return Ok(());
+                    }
+                }
             }
             _ => {
                 platform::shell_open(&url);
@@ -463,6 +486,30 @@ mod tests {
         assert!(replaces_as(dev, false, "0.4.0"));
         assert!(replaces_as(dev, false, "0.3.0-dev.def5678"));
         assert!(!replaces_as(dev, false, dev));
+    }
+
+    #[test]
+    fn the_running_copy_hears_the_request_to_quit() {
+        // A server like the mixer's, which drops a request whose
+        // connection closes before it's answered.
+        let quit = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let listener = runtime
+            .block_on(tokio::net::TcpListener::bind(("127.0.0.1", 0)))
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let heard = quit.clone();
+        let router = axum::Router::new().route(
+            "/api/quit",
+            axum::routing::post(move || async move {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                heard.store(true, std::sync::atomic::Ordering::SeqCst);
+                axum::http::StatusCode::NO_CONTENT
+            }),
+        );
+        runtime.spawn(async move { axum::serve(listener, router).await });
+        ask_to_quit(port).unwrap();
+        assert!(quit.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[test]
