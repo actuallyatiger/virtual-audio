@@ -159,7 +159,8 @@ mod imp {
         ShellExecuteExW, ShellExecuteW,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        IDYES, MB_ICONQUESTION, MB_SETFOREGROUND, MB_YESNO, MessageBoxW, SW_HIDE, SW_SHOWNORMAL,
+        IDYES, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_SETFOREGROUND, MB_YESNO, MessageBoxW,
+        SW_HIDE, SW_SHOWNORMAL,
     };
     use windows::core::{GUID, HSTRING, PCWSTR, PWSTR, w};
 
@@ -273,6 +274,18 @@ mod imp {
             std::fs::symlink_metadata(p)
                 .is_ok_and(|m| m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
         })
+    }
+
+    /// Shows a message in a Windows message box.
+    pub fn tell(message: &str) {
+        unsafe {
+            MessageBoxW(
+                None,
+                &HSTRING::from(message),
+                w!("Virtual Audio Mixer"),
+                MB_OK | MB_ICONWARNING | MB_SETFOREGROUND,
+            );
+        }
     }
 
     /// Asks a yes/no question in a Windows message box.
@@ -845,6 +858,10 @@ mod imp {
 
     pub fn ask(_question: &str) -> bool {
         false
+    }
+
+    pub fn tell(message: &str) {
+        eprintln!("{message}");
     }
 
     pub fn shell_open(target: &str) {
