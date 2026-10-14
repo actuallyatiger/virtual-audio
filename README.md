@@ -22,18 +22,16 @@ It runs as a small tray app and is controlled from a web page served on
 - **Any input device** as a source, or "default microphone", which follows the
   Windows default live. Sources that would capture the recording end of the
   output cable (a feedback loop) are refused with an error.
-- **Mic processing** for input devices (the ⚙ on a mic's card):
+- **Mic processing** for input devices (a mic card's settings ⚙):
   - *Noise suppression* (RNNoise) removes steady background noise such as
     fans, hum and keyboard clatter. With it on, you can turn off Discord's own
     noise suppression, which tends to cut out the soundboard and music.
-  - *Automatic level* keeps your voice at a steady speaking level, like
-    Discord's automatic gain control (which its raw "studio" mode turns
-    off). It turns the mic up or down slowly while you talk and holds still
-    between words, and shows how much it's adjusting by.
+  - *Automatic level* keeps your voice at a steady speaking level. It turns
+    the mic up or down slowly while you talk and holds still between words,
+    and shows how much it's adjusting by.
   - A *noise gate* silences the mic while you aren't talking. *Automatic*
     mode (the default) opens when RNNoise's voice detector hears speech
-    that's louder than the room's background noise, like Discord's automatic
-    input sensitivity. *Manual* mode opens above a level you set against a
+    that's louder than the room's background noise. *Manual* mode opens above a level you set against a
     live meter. Either way it stays open for 200 ms after you stop talking,
     so word endings aren't clipped, and it only gates the mic: the
     soundboard and apps always get through.
@@ -57,7 +55,7 @@ It runs as a small tray app and is controlled from a web page served on
   loudness, as in EBU R128) and turned up or down to a similar level a
   little below a speaking voice, without clipping. A sound's own volume
   applies on top.
-- **Trim sounds** in a sound's ⚙: drag the edges of its waveform (or type
+- **Trim sounds** in a sound's settings ⚙: drag the edges of its waveform (or type
   times), add fades, or **Trim silence** off both ends in one click.
   Trimming doesn't change the file, so **Reset** brings the whole sound
   back. **Preview** plays it only to you, through Hear sounds.
@@ -86,9 +84,9 @@ It runs as a small tray app and is controlled from a web page served on
   channel, play a sound, stop all sounds, or play/pause, skip or go back
   in the music.
   Keyboard combos and mouse side buttons (Mouse4/Mouse5) both work. Hotkeys
-  don't swallow the key, so it still reaches the game you're in. While an
-  app running as administrator is focused (some games do this), Windows
-  hides its keys from other apps, so run the mixer as administrator too
+  work in other apps, including games. While an app running as
+  administrator is focused (some games do this), Windows hides its keys
+  from other apps, so run the mixer as administrator too
   (Settings → Start with Windows → as Administrator).
 - **Setup check**, **Help** and **Settings** in the top bar, and an ⓘ next
   to each section explaining it. The theme follows your system's light or
