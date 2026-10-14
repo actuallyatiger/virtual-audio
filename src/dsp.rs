@@ -12,11 +12,14 @@
 //! that begins just as suddenly, it looks 30 ms ahead, delaying the mic by
 //! that much; the mixer can delay the other sources to match.
 //!
-//! Automatic level keeps speech at a steady level, as voice chat apps' gain
-//! control does: it measures the frames RNNoise's voice detector calls
-//! speech (those the gate lets through) and turns the mic up or down
-//! towards a target, slowly, and only while you talk, so background noise
-//! isn't raised in the pauses.
+//! Automatic level keeps speech at a steady level the way WebRTC's gain
+//! control (AGC2, used by browsers and voice chat apps) does, so you sound
+//! as loud as everyone else. It measures the frames RNNoise's voice detector
+//! is sure are speech (those the gate lets through, in runs of at least
+//! 120 ms) and turns the mic up or down so speech peaks reach -5 dBFS:
+//! speech's level plus a headroom for its peaks, learnt from how far they
+//! rise above it. It moves slowly, and only while you talk, so background
+//! noise isn't raised in the pauses.
 //!
 //! While any of them is on, the input is downmixed to mono
 //! (microphones are mono anyway) and processed in 10 ms frames: see
@@ -57,15 +60,29 @@ pub const LOOKAHEAD_FRAMES: usize = LOOKAHEAD * FRAME;
 pub fn delay_frames(suppress: bool, extra_strength: bool) -> usize {
     (if suppress { FRAME } else { 0 }) + if extra_strength { LOOKAHEAD_FRAMES } else { 0 }
 }
-/// Automatic level: the speech level (RMS of voiced frames, dBFS) to aim
-/// for, a normal speaking level in voice chat.
-const LEVEL_TARGET_DB: f32 = -18.0;
+/// Automatic level, after WebRTC's AGC2: the voice probability a frame
+/// needs to count as speech, and how many in a row (120 ms) before they
+/// count at all (shorter bursts are forgotten).
+const LEVEL_VOICE_PROBABILITY: f32 = 0.95;
+const LEVEL_SPEECH_RUN: u32 = 12;
+/// The speech level averages every voiced frame for 400 ms of speech, then
+/// forgets older ones over about 4 s.
+const LEVEL_CONFIDENT_FRAMES: u32 = 40;
+const LEVEL_LEAK: f32 = 1.0 - 1.0 / 400.0;
+/// Where speech level plus headroom is aimed (dBFS).
+const LEVEL_PEAK_TARGET_DB: f32 = -5.0;
+/// Headroom for speech's peaks above its level: the 400 ms peaks, from 1.6 s
+/// before, minus the level, followed slowly (over about 9 s up, 43 s down).
+const HEADROOM_START_DB: f32 = 20.0;
+const HEADROOM_MIN_DB: f32 = 12.0;
+const HEADROOM_MAX_DB: f32 = 25.0;
+const PEAK_WINDOW_FRAMES: u32 = 40;
+const PEAK_DELAY: usize = 4;
+const HEADROOM_ATTACK: f32 = 0.998_849_4;
+const HEADROOM_DECAY: f32 = 0.999_769_8;
 /// How far it may turn the mic down or up.
 const LEVEL_MIN_DB: f32 = -12.0;
 const LEVEL_MAX_DB: f32 = 20.0;
-/// How quickly the measured speech level follows each voiced frame (about
-/// half a second of speech).
-const LEVEL_SMOOTHING: f32 = 0.02;
 /// Gain change per 10 ms frame: up 3 dB/s, down 10 dB/s.
 const LEVEL_RISE_DB: f32 = 0.03;
 const LEVEL_FALL_DB: f32 = 0.1;
@@ -199,9 +216,12 @@ pub struct Processor {
     gain: f32,
     hold: u32,
     level: f32,
-    /// Automatic level: the speech level measured so far (dBFS), its
-    /// adjustment (dB), and the gain the last frame ended on.
-    speech_db: Option<f32>,
+    /// Automatic level: the speech measured so far, as of the last long
+    /// enough run of speech and as of now, and how many frames this run has
+    /// had; then its adjustment (dB), and the gain the last frame ended on.
+    speech: Speech,
+    speech_now: Speech,
+    speech_run: u32,
     level_db: f32,
     level_gain: f32,
     /// The most gain each sample of the frame may have (see `auto_level`).
@@ -222,7 +242,9 @@ impl Processor {
             gain: 1.0,
             hold: 0,
             level: 0.0,
-            speech_db: None,
+            speech: Speech::new(),
+            speech_now: Speech::new(),
+            speech_run: 0,
             level_db: ctrl.level_db(),
             level_gain: 1.0,
             level_caps: [0.0; FRAME],
@@ -316,8 +338,8 @@ impl Processor {
         // manual gate mutes quieter talk (someone else in the room), which
         // mustn't set your level. After the meter and the gate's level,
         // which are about the mic as it is.
-        let heard = speech && self.knock.is_none() && (!gate || auto || above_threshold);
-        self.auto_level(levelling, heard);
+        let heard = audible && self.knock.is_none() && (!gate || auto || above_threshold);
+        self.auto_level(levelling, if heard { voice } else { 0.0 }, peak);
         self.out.clear();
         if auto && self.ctrl.extra_strength.load(Ordering::Relaxed) {
             // Hold this frame back and let out the one from 30 ms ago: it
@@ -360,18 +382,31 @@ impl Processor {
         emit(&mut self.out, &mut self.gain, &self.frame, target);
     }
 
-    /// Automatic level: learns the speech level from frames of `speech`
-    /// and, during them, turns towards the target. Switched off, it returns
-    /// to 1.
-    fn auto_level(&mut self, on: bool, speech: bool) {
+    /// Automatic level: learns the speech level from frames that are
+    /// speech (`voice` probability; 0 for frames that mustn't count) with
+    /// `peak` (linear), and during runs of them turns towards the target.
+    /// Switched off, it returns to 1.
+    fn auto_level(&mut self, on: bool, voice: f32, peak: f32) {
         let rms = (self.frame.iter().map(|s| s * s).sum::<f32>() / FRAME as f32).sqrt();
-        if on && speech && rms > 0.0 {
-            let db = 20.0 * rms.log10();
-            let s = self.speech_db.get_or_insert(db);
-            *s += (db - *s) * LEVEL_SMOOTHING;
-            let want = (LEVEL_TARGET_DB - *s).clamp(LEVEL_MIN_DB, LEVEL_MAX_DB);
-            self.level_db += (want - self.level_db).clamp(-LEVEL_FALL_DB, LEVEL_RISE_DB);
-            self.ctrl.set_level_db(self.level_db);
+        if on && voice >= LEVEL_VOICE_PROBABILITY && rms > 0.0 {
+            self.speech_run += 1;
+            let peak_db = 20.0 * peak.max(1e-5).log10();
+            self.speech_now.add(20.0 * rms.log10(), peak_db, voice);
+            if self.speech_run >= LEVEL_SPEECH_RUN {
+                let s = &self.speech_now;
+                let want = (LEVEL_PEAK_TARGET_DB - s.headroom_db - s.level_db())
+                    .clamp(LEVEL_MIN_DB, LEVEL_MAX_DB);
+                self.level_db += (want - self.level_db).clamp(-LEVEL_FALL_DB, LEVEL_RISE_DB);
+                self.ctrl.set_level_db(self.level_db);
+            }
+        } else if on && self.speech_run > 0 {
+            // The run is over: keep it if it was long enough, else forget it.
+            if self.speech_run >= LEVEL_SPEECH_RUN {
+                self.speech = self.speech_now;
+            } else {
+                self.speech_now = self.speech;
+            }
+            self.speech_run = 0;
         }
         let target = if on {
             10f32.powf(self.level_db / 20.0)
@@ -438,6 +473,80 @@ impl Processor {
         self.ctrl
             .level
             .store(self.level.to_bits(), Ordering::Relaxed);
+    }
+}
+
+/// Automatic level's measure of speech, as WebRTC's AGC2 keeps it.
+#[derive(Clone, Copy)]
+struct Speech {
+    /// The speech level: an average of voiced frames' RMS (dBFS), weighted
+    /// by voice probability and forgetting older frames once confident.
+    sum: f32,
+    weight: f32,
+    frames: u32,
+    /// The loudest peak (dBFS) in the current 400 ms, and those before it,
+    /// oldest first.
+    window_peak_db: f32,
+    window_frames: u32,
+    peaks: [f32; PEAK_DELAY],
+    peaks_len: usize,
+    headroom_db: f32,
+}
+
+impl Speech {
+    fn new() -> Self {
+        Self {
+            sum: 0.0,
+            weight: 0.0,
+            frames: 0,
+            window_peak_db: -100.0,
+            window_frames: 0,
+            peaks: [-100.0; PEAK_DELAY],
+            peaks_len: 0,
+            headroom_db: HEADROOM_START_DB,
+        }
+    }
+
+    fn level_db(&self) -> f32 {
+        self.sum / self.weight
+    }
+
+    /// Adds a voiced frame.
+    fn add(&mut self, rms_db: f32, peak_db: f32, voice: f32) {
+        let leak = if self.frames < LEVEL_CONFIDENT_FRAMES {
+            self.frames += 1;
+            1.0
+        } else {
+            LEVEL_LEAK
+        };
+        self.sum = self.sum * leak + rms_db * voice;
+        self.weight = self.weight * leak + voice;
+
+        self.window_peak_db = self.window_peak_db.max(peak_db);
+        self.window_frames += 1;
+        if self.window_frames > PEAK_WINDOW_FRAMES {
+            if self.peaks_len < PEAK_DELAY {
+                self.peaks_len += 1;
+            } else {
+                self.peaks.rotate_left(1);
+            }
+            self.peaks[self.peaks_len - 1] = self.window_peak_db;
+            self.window_peak_db = -100.0;
+            self.window_frames = 0;
+        }
+        let delayed_peak_db = if self.peaks_len > 0 {
+            self.peaks[0]
+        } else {
+            self.window_peak_db
+        };
+        let difference = delayed_peak_db - self.level_db();
+        let keep = if difference > self.headroom_db {
+            HEADROOM_ATTACK
+        } else {
+            HEADROOM_DECAY
+        };
+        self.headroom_db = (self.headroom_db * keep + difference * (1.0 - keep))
+            .clamp(HEADROOM_MIN_DB, HEADROOM_MAX_DB);
     }
 }
 
@@ -827,6 +936,34 @@ mod auto_level_tests {
         // Its peaks stay below the ceiling.
         let peak = out.iter().fold(0f32, |m, s| m.max(s.abs()));
         assert!(peak <= LEVEL_CEILING + 1e-6, "peak {peak}");
+    }
+
+    /// RMS (dBFS) of the frames above -50 dBFS: the speech, pauses left out.
+    fn voiced_db(audio: &[f32]) -> f32 {
+        let frames: Vec<f32> = audio
+            .chunks(FRAME * CHANNELS)
+            .map(|f| f.iter().map(|s| s * s).sum::<f32>() / f.len() as f32)
+            .filter(|&e| e > 1e-5)
+            .collect();
+        10.0 * (frames.iter().sum::<f32>() / frames.len() as f32).log10()
+    }
+
+    #[test]
+    fn speech_is_levelled_where_webrtc_puts_it_with_room_for_peaks() {
+        // Aiming speech itself at -18 dBFS, as it used to, pushed its peaks
+        // into the ceiling and sounded much louder than other people.
+        for gain in [0.1, 0.3, 1.0] {
+            let (_, mut p) = levelled(0.0);
+            let input = speech(gain);
+            let mut out = Vec::new();
+            for _ in 0..6 {
+                out = run(&mut p, &input);
+            }
+            let db = voiced_db(&out);
+            assert!((-25.0..-20.0).contains(&db), "×{gain}: speech at {db} dBFS");
+            let peak = 20.0 * out.iter().fold(0f32, |m, s| m.max(s.abs())).log10();
+            assert!(peak < -5.0, "×{gain}: peaks at {peak} dBFS");
+        }
     }
 
     #[test]
