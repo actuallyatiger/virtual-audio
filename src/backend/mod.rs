@@ -29,6 +29,9 @@ pub enum CaptureTarget {
     Device(Option<String>),
     /// Process loopback including the process' children.
     Process(u32),
+    /// Everything playing on an output device (loopback). `None` = current
+    /// default output.
+    Output(Option<String>),
 }
 
 pub trait CaptureStream {

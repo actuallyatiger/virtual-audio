@@ -52,6 +52,9 @@ the UI in a headless browser.
   another thread can hold for long: pre-size buffers, use `rtrb` rings and
   atomics, and `try_lock` taps (skipping a block beats waiting). When holding
   two locks, take the engine's `inner` before the mixer.
+- The one exception: echo cancellation's AEC3 (the sonora crate) allocates
+  small buffers on the mic's capture thread while it's on (`src/dsp.rs`).
+  Don't add others.
 - Avoid clicks: every start, stop and jump ramps the gain (a few ms) instead
   of cutting mid-waveform.
 - New config fields go in structs with `#[serde(default)]`, so older

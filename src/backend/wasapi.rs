@@ -638,6 +638,16 @@ impl Backend for Wasapi {
                 let (client, fmt) = initialize(&make, AUDCLNT_STREAMFLAGS_LOOPBACK)?;
                 Ok(Box::new(Capture::start(client, fmt, format!("PID {pid}"))?))
             }
+            CaptureTarget::Output(id) => {
+                let dev = get_device(eRender, id.as_deref())?;
+                let name = device_name(&dev).unwrap_or_default();
+                tracing::info!("opening loopback of output {name:?}");
+                let make = || -> anyhow::Result<IAudioClient> {
+                    Ok(unsafe { dev.Activate(CLSCTX_ALL, None)? })
+                };
+                let (client, fmt) = initialize(&make, AUDCLNT_STREAMFLAGS_LOOPBACK)?;
+                Ok(Box::new(Capture::start(client, fmt, name)?))
+            }
         }
     }
 

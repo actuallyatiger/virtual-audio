@@ -3,7 +3,7 @@
 | Piece | Where |
 | --- | --- |
 | Mixing core: per-source SPSC ring buffers, gain ramps, meters, soft limiter | `src/mixer.rs` |
-| Mic processing: RNNoise noise suppression, automatic level (speech-driven gain), and a noise gate driven by RNNoise's voice detector or a level | `src/dsp.rs` |
+| Mic processing: echo cancellation (WebRTC's AEC3, via sonora), RNNoise noise suppression, automatic level (speech-driven gain), and a noise gate driven by RNNoise's voice detector or a level | `src/dsp.rs` |
 | Audio file decoding (Symphonia) and streaming resampling to 48 kHz | `src/decode.rs` |
 | Soundboard: sounds in memory, trims, playback | `src/soundboard.rs` |
 | Music: playlist, a decode thread streaming tracks from disk, ducking | `src/music.rs` |
@@ -40,6 +40,9 @@ executable with `include_str!`, so the release is a single `.exe`.
   the soundboard or the music on the default output.
 - **Supervisor**: every 500 ms it (re)starts captures, the output and the
   monitors as devices and apps come and go, and applies source delays.
+- **Echo reference** (one per mic with echo cancellation on): captures what
+  plays on the Windows default output by loopback into a ring the mic's
+  capture thread feeds to the echo canceller (`try_lock`ed, like taps).
 - **Music decoder**: streams the current track into a half-second feed.
 - **Hotkeys**: polls key state every 10 ms.
 - **Updates**: checks the latest release 30 s after start and every 6 hours
@@ -52,7 +55,9 @@ executable with `include_str!`, so the release is a single `.exe`.
 Rules that keep the audio glitch-free: nothing on the render or capture
 paths allocates, blocks or waits on a lock another thread can hold for long
 (taps use `try_lock` and skip a block rather than wait). Where two locks are
-held, the engine's `inner` is always taken before the mixer.
+held, the engine's `inner` is always taken before the mixer. The one
+exception: echo cancellation (sonora's AEC3) allocates small, short-lived
+buffers on the mic's capture thread, while it's on.
 
 ## Start with Windows
 
@@ -110,14 +115,15 @@ new host's format; the signing key moves with it unchanged.
 
 ## Mic processing delay
 
+Echo cancellation delays the mic by 430 samples, about 9 ms, because AEC3
+works on frequency bands in blocks (`ECHO_DELAY`, which a test checks).
 Noise suppression delays the mic by 10 ms (RNNoise's output lags its input
 by a frame). The gate's *extra strength* looks 30 ms ahead. Gathering 10 ms
 frames adds nothing while Windows delivers 10 ms blocks, as it usually does,
 and automatic level, which only needs the voice detector's verdict, adds
-nothing either.
-The other sources are delayed to match suppression's 10 ms always, and
-extra strength's 30 ms with *keep everything else in time*
-(`Engine::apply_delays`, `Mixer::set_delay`).
+nothing either. The other sources are always delayed to match echo
+cancellation and suppression, and extra strength's 30 ms with *keep
+everything else in time* (`Engine::apply_delays`, `Mixer::set_delay`).
 
 ## Web UI
 

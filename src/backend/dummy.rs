@@ -104,6 +104,13 @@ impl Backend for Dummy {
                     .ok_or_else(|| anyhow::anyhow!("no such process"))?;
                 (app.2, app.0.to_string(), true)
             }
+            // What you'd hear: quiet, so a demo mic's echo cancellation has
+            // something to listen to.
+            CaptureTarget::Output(id) => (
+                330.0,
+                id.clone().unwrap_or_else(|| "dummy-speakers".into()),
+                true,
+            ),
         };
         Ok(Box::new(Tone {
             freq,

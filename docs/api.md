@@ -10,7 +10,7 @@ The UI's server listens on `http://127.0.0.1:47800` by default (`port` in
 | GET | `/api/apps` | |
 | POST | `/api/sources` | `{"kind":"app","exe":"chrome.exe"}` or `{"kind":"device","device":null}`, plus an optional `"name"`; or `{"kind":"soundboard"}` / `{"kind":"music"}` (one of each) |
 | PUT | `/api/sources/order` | `{"ids":["…","…"]}` (every source id, in the new order) |
-| PATCH | `/api/channels/{id or "master"}` | `{"gain_db":-6,"muted":true,"name":"…"}` (`name` applies to sources only). Input devices also take `noise_suppression`, `noise_gate` (booleans), `gate_mode` (`"auto"` or `"manual"`), `gate_db` (−60 to 0, for manual), `extra_strength` and `keep_in_time` (booleans, for automatic), and `auto_level` (boolean). |
+| PATCH | `/api/channels/{id or "master"}` | `{"gain_db":-6,"muted":true,"name":"…"}` (`name` applies to sources only). Input devices also take `noise_suppression`, `noise_gate` (booleans), `gate_mode` (`"auto"` or `"manual"`), `gate_db` (−60 to 0, for manual), `extra_strength` and `keep_in_time` (booleans, for automatic), `auto_level` and `echo_cancellation` (booleans). Each source in the state has `echo_status`: `null` unless echo cancellation is on, else `{state, message}` with `state` `waiting`, `running` (`message` is the output it listens to) or `error` (`message` says why). |
 | DELETE | `/api/channels/{id}` | Removing the soundboard keeps its sounds, and removing the music keeps its playlist (and pauses it); add them back with `POST /api/sources` `{"kind":"soundboard"}` or `{"kind":"music"}`. |
 | PUT | `/api/output` | `{"device":{"id":"…","name":"…"}}` or `{"device":null}` |
 | POST | `/api/sounds?filename=horn.mp3&name=…` | The raw file. Adds the soundboard to the mix if it isn't there. |

@@ -263,6 +263,11 @@
     <form method="dialog" class="dialog-body">
       <h2 id="mic-title">Mic processing</h2>
       <div>
+        <label class="check"><input type="checkbox" id="mic-echo" aria-describedby="mic-echo-hint mic-echo-now"> Echo cancellation</label>
+        <p class="hint small" id="mic-echo-hint">For speakers: stops others hearing themselves. Not needed with headphones.</p>
+        <p class="hint small" id="mic-echo-now" role="status"></p>
+      </div>
+      <div>
         <label class="check"><input type="checkbox" id="mic-suppress"> Noise suppression</label>
         <p class="hint small">Removes steady noise such as fans and hum.</p>
       </div>
@@ -464,6 +469,13 @@
           <h3>Mic processing</h3>
           <p>Open it with a mic card's settings ⚙. It only affects that mic.</p>
           <ul>
+            <li><b>Echo cancellation:</b> for speakers. Stops others hearing themselves, or your game, through your mic.
+              <ul>
+                <li>Removes what plays on your Windows default output from your mic. That must be your speakers, not the cable.</li>
+                <li>Not needed with headphones.</li>
+                <li>Delays your mic by 9 ms. The other sources are delayed to match.</li>
+              </ul>
+            </li>
             <li><b>Noise suppression:</b> removes steady noise such as fans and hum.</li>
             <li><b>Automatic level:</b> keeps your voice at a steady level.
               <ul>
@@ -543,6 +555,7 @@
         <section id="help-trouble">
           <h3>Troubleshooting</h3>
           <ul>
+            <li><b>Others hear themselves or your game:</b> use headphones, or turn on <b>Echo cancellation</b> in your mic's settings ⚙. It needs your speakers as the Windows default output.</li>
             <li><b>Others hear nothing:</b> run <b>Setup check</b>. Check the app uses CABLE Output, and the mic card's meter moves when you talk.</li>
             <li><b>Others say I'm quiet:</b> turn on <b>Automatic level</b> in your mic's settings ⚙. Also ask them to check your <i>User Volume</i> in Discord (right-click your name).</li>
             <li><b>Everything I play ends up in the mic:</b> your Windows default output is the cable. Set it back to your speakers or headphones.</li>

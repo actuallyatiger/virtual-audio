@@ -251,7 +251,12 @@ async fn update_channel(
     Path(id): Path<String>,
     Json(body): Json<ChannelPatch>,
 ) -> ApiResult {
-    app.engine.update_channel(&id, body).map_err(bad)?;
+    // Switching echo cancellation runs the supervisor, which asks Windows
+    // about devices.
+    blocking(&app, StatusCode::BAD_REQUEST, move |e| {
+        e.update_channel(&id, body)
+    })
+    .await?;
     ok()
 }
 
