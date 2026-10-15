@@ -69,6 +69,14 @@ impl Backend for Dummy {
         ])
     }
 
+    fn bluetooth_devices(&self) -> anyhow::Result<Vec<DeviceInfo>> {
+        Ok(vec![DeviceInfo {
+            id: "dummy-phone".into(),
+            name: "Phone (Dummy)".into(),
+            is_default: false,
+        }])
+    }
+
     fn audio_apps(&self) -> anyhow::Result<Vec<AppInfo>> {
         Ok(APPS
             .iter()
@@ -103,6 +111,10 @@ impl Backend for Dummy {
                     .find(|a| a.1 == *pid)
                     .ok_or_else(|| anyhow::anyhow!("no such process"))?;
                 (app.2, app.0.to_string(), true)
+            }
+            CaptureTarget::Bluetooth(id) => {
+                anyhow::ensure!(id == "dummy-phone", "the phone isn't in range");
+                (392.0, "Phone (Dummy)".into(), true)
             }
             // What you'd hear: quiet, so a demo mic's echo cancellation has
             // something to listen to.

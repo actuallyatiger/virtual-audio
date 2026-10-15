@@ -12,6 +12,7 @@ pub struct Config {
     /// Render endpoint the final mix is written to (e.g. "CABLE Input").
     pub output: Option<DeviceRef>,
     pub master: Channel,
+    #[serde(deserialize_with = "known_sources")]
     pub sources: Vec<SourceConfig>,
     pub hotkeys: Vec<Hotkey>,
     /// Soundboard sounds, in display order.
@@ -54,6 +55,26 @@ pub enum UpdateMode {
 fn update_mode_or_auto<'de, D: Deserializer<'de>>(d: D) -> Result<UpdateMode, D::Error> {
     let v = serde_json::Value::deserialize(d)?;
     Ok(UpdateMode::deserialize(v).unwrap_or_default())
+}
+
+/// The kinds of source this build knows (`SourceKind`'s tags).
+const SOURCE_KINDS: [&str; 5] = ["device", "app", "bluetooth", "soundboard", "music"];
+
+/// A source of a kind this build doesn't know (added by a newer one) is left
+/// out, instead of making the whole file unreadable. A broken one of a known
+/// kind still is.
+fn known_sources<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<SourceConfig>, D::Error> {
+    let values = Vec::<serde_json::Value>::deserialize(d)?;
+    let mut sources = Vec::new();
+    for v in values {
+        match v.get("kind").and_then(|k| k.as_str()) {
+            Some(kind) if !SOURCE_KINDS.contains(&kind) => {
+                tracing::warn!("leaving out a {kind} source, which this version doesn't know");
+            }
+            _ => sources.push(SourceConfig::deserialize(v).map_err(serde::de::Error::custom)?),
+        }
+    }
+    Ok(sources)
 }
 
 /// A theme this build doesn't know (written by a newer one) falls back to
@@ -261,6 +282,9 @@ pub enum SourceKind {
     /// Audio rendered by a process (and its child processes), matched by
     /// executable name so it survives app restarts.
     App { exe: String },
+    /// A Bluetooth device such as a phone, playing to this PC as if it were
+    /// a speaker.
+    Bluetooth { device: DeviceRef },
     /// The built-in soundboard (at most one).
     Soundboard,
     /// The music player (at most one).
@@ -401,6 +425,37 @@ mod tests {
         assert_eq!(off.updates, UpdateMode::Off);
         let newer: Config = serde_json::from_str(r#"{"updates":"nightly"}"#).unwrap();
         assert_eq!(newer.updates, UpdateMode::Auto);
+    }
+
+    #[test]
+    fn a_source_from_a_newer_version_is_left_out_not_the_file() {
+        let newer: Config = serde_json::from_str(
+            r#"{"port":1,"sources":[
+                {"id":"a","name":"Chrome","kind":"app","exe":"chrome.exe"},
+                {"id":"b","name":"Hologram","kind":"hologram","beam":3},
+                {"id":"c","name":"Phone","kind":"bluetooth","device":{"id":"bt","name":"Pixel"}}
+            ]}"#,
+        )
+        .unwrap();
+        let ids: Vec<&str> = newer.sources.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!((newer.port, ids), (1, vec!["a", "c"]));
+        // Every kind this build has is known.
+        let device = DeviceRef {
+            id: "d".into(),
+            name: "d".into(),
+        };
+        for kind in [
+            SourceKind::Device { device: None },
+            SourceKind::App {
+                exe: "a.exe".into(),
+            },
+            SourceKind::Bluetooth { device },
+            SourceKind::Soundboard,
+            SourceKind::Music,
+        ] {
+            let tag = serde_json::to_value(&kind).unwrap()["kind"].clone();
+            assert!(SOURCE_KINDS.contains(&tag.as_str().unwrap()), "{tag}");
+        }
     }
 
     #[test]

@@ -10,6 +10,7 @@
 | Engine: config, capture/render/monitor threads, supervisor that restarts captures, output and Listen as apps/devices come and go | `src/engine.rs` |
 | WASAPI backend: shared-mode event-driven streams, process loopback, device and session enumeration | `src/backend/wasapi.rs` |
 | Demo backend for non-Windows hosts | `src/backend/dummy.rs` |
+| Phones over Bluetooth: a helper process (`--bluetooth-host`) holds Windows' `AudioPlaybackConnection`, and the backend captures that process's audio | `src/bluetooth.rs`, `src/backend/wasapi.rs` |
 | Global hotkeys (polled, non-blocking) | `src/hotkeys.rs` |
 | HTTP/WebSocket API (axum) and embedded UI | `src/server.rs`, `web/` |
 | Tray icon, autostart, browser launch | `src/tray.rs`, `src/platform.rs` |
