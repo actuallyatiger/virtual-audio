@@ -28,6 +28,7 @@ const ICONS = {
   sliders: `<svg ${SVG}><path d="M6 4v16M12 4v16M18 4v16" stroke-width="1.5" opacity=".55"/><path d="M4 15h4M10 8h4M16 12h4" stroke-width="3"/></svg>`,
   window: `<svg ${SVG}><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg>`,
   mic: `<svg ${SVG}><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></svg>`,
+  phone: `<svg ${SVG}><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>`,
   speaker: `<svg ${SVG}><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.5 9a4 4 0 0 1 0 6M19 6.5a8 8 0 0 1 0 11"/></svg>`,
   cog: `<svg ${SVG} stroke-width="1.75"><path d="M19.21 9.59 L19.51 10.81 L22.13 10.85 L22.13 13.15 L19.51 13.19 L19.21 14.41 L18.80 15.39 L18.15 16.47 L19.98 18.35 L18.35 19.98 L16.47 18.15 L15.39 18.80 L14.41 19.21 L13.19 19.51 L13.15 22.13 L10.85 22.13 L10.81 19.51 L9.59 19.21 L8.61 18.80 L7.53 18.15 L5.65 19.98 L4.02 18.35 L5.85 16.47 L5.20 15.39 L4.79 14.41 L4.49 13.19 L1.87 13.15 L1.87 10.85 L4.49 10.81 L4.79 9.59 L5.20 8.61 L5.85 7.53 L4.02 5.65 L5.65 4.02 L7.53 5.85 L8.61 5.20 L9.59 4.79 L10.81 4.49 L10.85 1.87 L13.15 1.87 L13.19 4.49 L14.41 4.79 L15.39 5.20 L16.47 5.85 L18.35 4.02 L19.98 5.65 L18.15 7.53 L18.80 8.61Z"/><circle cx="12" cy="12" r="3"/></svg>`,
   refresh: `<svg ${SVG}><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></svg>`,
@@ -252,7 +253,8 @@ function channelList() {
       device: [s.device ? s.device.name : "Default microphone", "mic"],
       soundboard: ["Sound effects", "speaker"],
       music: ["Playlist", "music"],
-    }[s.kind];
+      bluetooth: ["Phone, over Bluetooth", "phone"],
+    }[s.kind] ?? [s.kind, "speaker"];
     list.push({ ...s, detail, icon });
   }
   return list;
@@ -854,7 +856,7 @@ $("#mic-dialog").addEventListener("close", () => {
 // ---------------------------------------------------------------- add source
 
 // `fromList` says whether the selection came from a list (vs. typed).
-const addState = { tab: "app", selection: null, fromList: false };
+const addState = { tab: "app", selection: null, fromList: false, phonesLoaded: false };
 let listRequests = 0; // ignore responses to superseded list loads
 
 function openAddDialog() {
@@ -865,6 +867,7 @@ function openAddDialog() {
   selectTab("app");
   updateAddButton();
   $("#add-dialog").showModal();
+  addState.phonesLoaded = false;
   loadApps();
   loadInputs();
 }
@@ -879,6 +882,8 @@ function selectTab(tab) {
   for (const b of document.querySelectorAll("#add-dialog .pick-list button")) b.setAttribute("aria-pressed", "false");
   // A name still typed in the app tab is the selection again.
   if (tab === "app") selectTypedExe();
+  // Looking for Bluetooth devices takes a moment: only when asked.
+  if (tab === "phone" && !addState.phonesLoaded) loadPhones();
   updateAddButton();
 }
 
@@ -950,7 +955,29 @@ async function loadInputs() {
   }
 }
 
+let phoneRequests = 0;
+async function loadPhones() {
+  addState.phonesLoaded = true;
+  const list = $("#phone-list");
+  const request = ++phoneRequests;
+  list.replaceChildren(el("li", { className: "empty", textContent: "Looking…" }));
+  try {
+    const { devices } = await api("GET", "/api/bluetooth");
+    if (request !== phoneRequests) return;
+    const selections = devices.map((d) => ({ kind: "bluetooth", device: { id: d.id, name: d.name } }));
+    if (addState.selection?.kind === "bluetooth" && !selections.some((s) => sameSelection(s, addState.selection))) {
+      addState.selection = null;
+      updateAddButton();
+    }
+    const items = devices.map((d, i) => pickButton(d.name, "", selections[i]));
+    list.replaceChildren(...(items.length ? items : [el("li", { className: "empty", textContent: "No paired phones. Pair one in Windows' Bluetooth settings, then refresh." })]));
+  } catch (e) {
+    if (request === phoneRequests) list.replaceChildren(el("li", { className: "error", textContent: e.message }));
+  }
+}
+
 for (const b of document.querySelectorAll("#add-dialog [role=tab]")) b.addEventListener("click", () => selectTab(b.dataset.tab));
+$("#refresh-phones").addEventListener("click", loadPhones);
 $("#refresh-apps").addEventListener("click", loadApps);
 $("#exe-input").addEventListener("input", () => {
   for (const b of document.querySelectorAll("#app-list button")) b.setAttribute("aria-pressed", "false");

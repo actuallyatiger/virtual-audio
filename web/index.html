@@ -201,6 +201,7 @@
       <div class="tabs" role="tablist">
         <button type="button" role="tab" data-tab="app" aria-selected="true">App</button>
         <button type="button" role="tab" data-tab="device" aria-selected="false">Microphone / input</button>
+        <button type="button" role="tab" data-tab="phone" aria-selected="false">Phone</button>
       </div>
       <div class="tab-panel" data-panel="app">
         <p class="hint">Captures everything an app plays. It still plays on your speakers too.</p>
@@ -212,6 +213,11 @@
       </div>
       <div class="tab-panel" data-panel="device" hidden>
         <ul id="device-list" class="pick-list"></ul>
+      </div>
+      <div class="tab-panel" data-panel="phone" hidden>
+        <p class="hint">Plays a phone's audio into the mix over Bluetooth. Pair it in Windows' Bluetooth settings first.</p>
+        <div class="list-head"><span>Paired devices</span><button type="button" id="refresh-phones" class="ghost icon" data-icon="refresh" title="Refresh" aria-label="Refresh paired devices"></button></div>
+        <ul id="phone-list" class="pick-list"></ul>
       </div>
       <p id="add-error" class="error" hidden></p>
       <div class="dialog-actions">
@@ -455,6 +461,12 @@
               </ul>
             </li>
             <li><b>Mics and inputs:</b> a device, or <i>Default microphone</i>, which follows Windows. The cable's own recording side isn't allowed: it would loop the mix into itself.</li>
+            <li><b>Phones:</b> plays a phone's audio into the mix over Bluetooth, with this PC as its speaker.
+              <ul>
+                <li>Pair the phone in Windows' Bluetooth settings first.</li>
+                <li>If it's out of range or Bluetooth is off, the mixer keeps trying.</li>
+              </ul>
+            </li>
             <li><b>Master</b> sets the level of the whole mix. A limiter stops it clipping.</li>
             <li><b>Listen</b> plays the mix on your default output, so you hear what others hear.
               <ul>

@@ -303,6 +303,163 @@ fn session_pids() -> anyhow::Result<Vec<(u32, bool)>> {
 }
 
 // ---------------------------------------------------------------------------
+// Bluetooth (see crate::bluetooth)
+
+/// A phone playing to this PC: the helper holding the connection, and, once
+/// it has connected, a capture of its audio. It connects as it's read, so
+/// the capture thread can stop it while it's still connecting.
+struct Phone {
+    helper: std::process::Child,
+    /// The helper's answer: "connected" or "error …".
+    answer: std::sync::mpsc::Receiver<String>,
+    capture: Option<Capture>,
+    started: std::time::Instant,
+    /// Whether its audio has arrived; whether the status said it hadn't
+    /// (and the audio sessions were logged); the status to show next.
+    heard: bool,
+    said_quiet: bool,
+    status: Option<(&'static str, String)>,
+}
+
+/// How long a phone gets to answer.
+const PHONE_CONNECT: std::time::Duration = std::time::Duration::from_secs(30);
+/// How long after connecting with no sound the status says so.
+const PHONE_QUIET: std::time::Duration = std::time::Duration::from_secs(20);
+
+impl Phone {
+    fn start(id: &str) -> anyhow::Result<Self> {
+        use std::io::BufRead;
+        use std::os::windows::process::CommandExt;
+        /// Keeps the helper from flashing a console window.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut helper = std::process::Command::new(std::env::current_exe()?)
+            .args([crate::bluetooth::HOST_FLAG, id])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .context("starting the Bluetooth helper")?;
+        let stdout = helper.stdout.take().context("the helper's output")?;
+        let (tx, answer) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut line = String::new();
+            let _ = std::io::BufReader::new(stdout).read_line(&mut line);
+            let _ = tx.send(line.trim().to_owned());
+        });
+        Ok(Self {
+            helper,
+            answer,
+            capture: None,
+            started: std::time::Instant::now(),
+            heard: false,
+            said_quiet: false,
+            status: Some(("waiting", "Connecting…".into())),
+        })
+    }
+
+    /// Waits a moment for the helper's answer, and once it has connected,
+    /// starts capturing its audio.
+    fn connect(&mut self) -> anyhow::Result<()> {
+        use std::sync::mpsc::RecvTimeoutError;
+        let answer = match self
+            .answer
+            .recv_timeout(std::time::Duration::from_millis(100))
+        {
+            Ok(answer) => answer,
+            Err(RecvTimeoutError::Timeout) if self.started.elapsed() < PHONE_CONNECT => {
+                return Ok(());
+            }
+            Err(_) => bail!("it didn't connect"),
+        };
+        if answer != "connected" {
+            bail!(
+                "{}",
+                answer.strip_prefix("error ").unwrap_or("it didn't connect")
+            );
+        }
+        let pid = self.helper.id();
+        let make = || activate_process_loopback(pid);
+        let (client, fmt) = initialize(&make, AUDCLNT_STREAMFLAGS_LOOPBACK)?;
+        self.capture = Some(Capture::start(client, fmt, "connected".into())?);
+        self.started = std::time::Instant::now();
+        self.status = Some(("running", "Connected".into()));
+        tracing::info!("bluetooth: connected (helper PID {pid})");
+        log_sessions("bluetooth: connected; audio sessions now");
+        Ok(())
+    }
+}
+
+impl CaptureStream for Phone {
+    fn read(&mut self, sink: &mut dyn FnMut(&[f32])) -> anyhow::Result<()> {
+        if self.helper.try_wait()?.is_some() {
+            bail!("disconnected");
+        }
+        let Some(capture) = &mut self.capture else {
+            return self.connect();
+        };
+        let heard = &mut self.heard;
+        capture.read(&mut |data| {
+            if !*heard && data.iter().any(|s| s.abs() > 1e-4) {
+                *heard = true;
+                tracing::info!("bluetooth: its audio is arriving through the helper");
+            }
+            sink(data)
+        })?;
+        if self.heard && self.said_quiet {
+            self.said_quiet = false;
+            self.status = Some(("running", "Connected".into()));
+        } else if !self.heard && !self.said_quiet && self.started.elapsed() >= PHONE_QUIET {
+            // Paused, or Windows plays its audio somewhere the mixer doesn't
+            // capture, which only a real PC can tell: the log says where.
+            self.said_quiet = true;
+            self.status = Some(("running", "Connected, but no sound yet".into()));
+            log_sessions("bluetooth: nothing through the helper after 20 s; audio sessions");
+        }
+        Ok(())
+    }
+
+    fn describe(&self) -> String {
+        "Bluetooth".into()
+    }
+
+    fn status(&mut self) -> Option<(&'static str, String)> {
+        self.status.take()
+    }
+}
+
+impl Drop for Phone {
+    fn drop(&mut self) {
+        // Closing its input lets it close the connection itself; it's killed
+        // if it hasn't within 2 s.
+        drop(self.helper.stdin.take());
+        for _ in 0..20 {
+            if self.helper.try_wait().ok().flatten().is_some() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let _ = self.helper.kill();
+        let _ = self.helper.wait();
+    }
+}
+
+/// Logs every audio session on the outputs, with its process.
+fn log_sessions(what: &str) {
+    let procs = processes();
+    let by_pid: HashMap<u32, &Proc> = procs.iter().map(|p| (p.pid, p)).collect();
+    let sessions: Vec<String> = session_pids()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(pid, active)| {
+            let exe = by_pid.get(&pid).map_or("?", |p| p.exe.as_str());
+            format!("{exe} (PID {pid}{})", if active { ", playing" } else { "" })
+        })
+        .collect();
+    tracing::info!("{what}: {}", sessions.join(", "));
+}
+
+// ---------------------------------------------------------------------------
 // Process loopback activation
 
 /// Everything an in-flight activation may touch: the params, the
@@ -553,6 +710,42 @@ impl Backend for Wasapi {
         list_devices(eRender)
     }
 
+    fn bluetooth_devices(&self) -> anyhow::Result<Vec<DeviceInfo>> {
+        use windows::Devices::Enumeration::DeviceInformation;
+        use windows::Media::Audio::AudioPlaybackConnection;
+        /// What Windows says when it hasn't got the API at all.
+        const CLASS_NOT_REGISTERED: HRESULT = HRESULT(0x8004_0154_u32 as i32);
+        // On its own thread, so a Bluetooth stack that never answers can't
+        // hold the request forever.
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let find = || -> windows::core::Result<Vec<DeviceInfo>> {
+                ensure_com();
+                let selector = AudioPlaybackConnection::GetDeviceSelector()?;
+                let found = DeviceInformation::FindAllAsyncAqsFilter(&selector)?.join()?;
+                let mut devices = Vec::new();
+                for i in 0..found.Size()? {
+                    let d = found.GetAt(i)?;
+                    devices.push(DeviceInfo {
+                        id: d.Id()?.to_string(),
+                        name: d.Name()?.to_string(),
+                        is_default: false,
+                    });
+                }
+                Ok(devices)
+            };
+            let _ = tx.send(find());
+        });
+        match rx.recv_timeout(std::time::Duration::from_secs(15)) {
+            Ok(Ok(devices)) => Ok(devices),
+            Ok(Err(e)) if e.code() == CLASS_NOT_REGISTERED => {
+                bail!("Phones need Windows 10 version 2004 or later")
+            }
+            Ok(Err(e)) => Err(e.into()),
+            Err(_) => bail!("Bluetooth didn't answer. Check it's on, and try again"),
+        }
+    }
+
     fn audio_apps(&self) -> anyhow::Result<Vec<AppInfo>> {
         let procs = processes();
         let by_pid: HashMap<u32, &Proc> = procs.iter().map(|p| (p.pid, p)).collect();
@@ -638,6 +831,7 @@ impl Backend for Wasapi {
                 let (client, fmt) = initialize(&make, AUDCLNT_STREAMFLAGS_LOOPBACK)?;
                 Ok(Box::new(Capture::start(client, fmt, format!("PID {pid}"))?))
             }
+            CaptureTarget::Bluetooth(id) => Ok(Box::new(Phone::start(id)?)),
             CaptureTarget::Output(id) => {
                 let dev = get_device(eRender, id.as_deref())?;
                 let name = device_name(&dev).unwrap_or_default();

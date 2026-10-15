@@ -32,6 +32,9 @@ pub enum CaptureTarget {
     /// Everything playing on an output device (loopback). `None` = current
     /// default output.
     Output(Option<String>),
+    /// A Bluetooth device (a phone) playing to this PC, by its id from
+    /// [`Backend::bluetooth_devices`].
+    Bluetooth(String),
 }
 
 pub trait CaptureStream {
@@ -40,6 +43,11 @@ pub trait CaptureStream {
     fn read(&mut self, sink: &mut dyn FnMut(&[f32])) -> anyhow::Result<()>;
     /// Short human readable description (e.g. resolved device name).
     fn describe(&self) -> String;
+    /// A new state ("waiting" or "running") and message for the source's
+    /// status, when it has changed (a phone connecting, say).
+    fn status(&mut self) -> Option<(&'static str, String)> {
+        None
+    }
 }
 
 pub trait RenderStream {
@@ -57,6 +65,9 @@ pub trait Backend: Send + Sync + 'static {
     /// Processes that currently own an audio session, collapsed to the
     /// top-most process of each executable.
     fn audio_apps(&self) -> anyhow::Result<Vec<AppInfo>>;
+    /// Paired Bluetooth devices that can play audio to this PC (phones).
+    /// Can take a few seconds.
+    fn bluetooth_devices(&self) -> anyhow::Result<Vec<DeviceInfo>>;
     /// Finds the root process for an executable name (case-insensitive).
     fn find_process(&self, exe: &str) -> Option<u32>;
     fn process_alive(&self, pid: u32) -> bool;
