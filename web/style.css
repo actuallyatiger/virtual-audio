@@ -84,6 +84,9 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 button.ghost { background: transparent; }
 button.danger:hover { border-color: var(--bad); color: var(--bad); }
 button.bad { color: var(--bad); }
+.hint.bad { color: var(--bad); }
+/* A status line with nothing to say takes no room, but stays a live region. */
+.hint[role="status"]:empty { margin: 0; }
 button.bad:hover:not(:disabled) { border-color: var(--bad); }
 button.small { padding: 3px 10px; font-size: 13px; }
 /* Square icon buttons (refresh, reorder handle, remove, settings). */

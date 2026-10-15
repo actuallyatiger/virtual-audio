@@ -23,6 +23,10 @@ It runs as a small tray app and is controlled from a web page served on
   Windows default live. Sources that would capture the recording end of the
   output cable (a feedback loop) are refused with an error.
 - **Mic processing** for input devices (a mic card's settings ⚙):
+  - *Echo cancellation* (WebRTC's AEC3, as in browsers and Discord) is for
+    speakers: it removes what plays on the Windows default output from the
+    mic, so others don't hear themselves. It adds 9 ms of delay, which the
+    other sources are delayed to match. Not needed with headphones.
   - *Noise suppression* (RNNoise) removes steady background noise such as
     fans, hum and keyboard clatter. With it on, you can turn off Discord's own
     noise suppression, which tends to cut out the soundboard and music.

@@ -99,6 +99,7 @@ struct SourceRuntime {
     /// For "default microphone" sources: the device the capture opened.
     default_id: Option<String>,
     retry_at: Instant,
+    echo: EchoReference,
 }
 
 struct Inner {
@@ -165,6 +166,43 @@ impl Monitor {
     }
 }
 
+/// What a mic's echo cancellation listens to: everything playing on the
+/// Windows default output (what you hear), captured by loopback.
+struct EchoReference {
+    worker: Option<Worker>,
+    status: SharedStatus,
+    /// (default output id, mix output id) it was last set up for.
+    key: Option<(Option<String>, Option<String>)>,
+    retry_at: Instant,
+}
+
+impl EchoReference {
+    fn new() -> Self {
+        Self {
+            worker: None,
+            status: Arc::new(Mutex::new(Status::new("idle", ""))),
+            key: None,
+            retry_at: Instant::now(),
+        }
+    }
+
+    fn stop(&mut self, processing: &ProcessingControl) {
+        processing.set_reference(None);
+        if let Some(w) = self.worker.take() {
+            w.stop();
+        }
+        self.key = None;
+        self.status = Arc::new(Mutex::new(Status::new("idle", "")));
+    }
+
+    /// Shows why it can't listen; the supervisor re-checks when devices
+    /// change.
+    fn refuse(&mut self, message: String) {
+        tracing::warn!("echo cancellation: {message}");
+        self.status = Arc::new(Mutex::new(Status::new("error", message)));
+    }
+}
+
 pub struct Engine {
     backend: Arc<dyn Backend>,
     inner: Mutex<Inner>,
@@ -197,6 +235,7 @@ pub struct ChannelPatch {
     pub extra_strength: Option<bool>,
     pub keep_in_time: Option<bool>,
     pub auto_level: Option<bool>,
+    pub echo_cancellation: Option<bool>,
 }
 
 /// The music player for the UI: settings, list and what's playing.
@@ -281,6 +320,8 @@ pub struct SourceView {
     #[serde(flatten)]
     pub processing: Processing,
     pub status: Status,
+    /// What echo cancellation listens to, while it's on.
+    pub echo_status: Option<Status>,
 }
 
 #[derive(Serialize)]
@@ -472,6 +513,7 @@ impl Engine {
             if let Some(w) = rt.capture.take() {
                 w.stop();
             }
+            rt.echo.stop(&rt.processing);
         }
         note_auto_levels(&mut inner, 0.0);
         if let Err(e) = inner.config.save() {
@@ -500,6 +542,10 @@ impl Engine {
                     channel: s.channel.clone(),
                     processing: s.processing.clone(),
                     status: inner.sources[&s.id].status.lock().unwrap().clone(),
+                    echo_status: s
+                        .processing
+                        .echo_cancellation
+                        .then(|| inner.sources[&s.id].echo.status.lock().unwrap().clone()),
                 })
                 .collect(),
             hotkeys: inner.config.hotkeys.clone(),
@@ -669,10 +715,11 @@ impl Engine {
             SourceKind::Music => self.music.pause(),
             _ => {}
         }
-        if let Some(rt) = inner.sources.remove(id)
-            && let Some(w) = rt.capture
-        {
-            w.stop();
+        if let Some(mut rt) = inner.sources.remove(id) {
+            rt.echo.stop(&rt.processing);
+            if let Some(w) = rt.capture {
+                w.stop();
+            }
         }
         inner.config.hotkeys.retain(|h| h.target != id);
         self.mixer.lock().unwrap().remove_input(id);
@@ -693,8 +740,10 @@ impl Engine {
             || patch.gate_db.is_some()
             || patch.extra_strength.is_some()
             || patch.keep_in_time.is_some()
-            || patch.auto_level.is_some();
+            || patch.auto_level.is_some()
+            || patch.echo_cancellation.is_some();
         let mut inner = self.inner.lock().unwrap();
+        let mut echo_toggled = false;
         let (channel, ctrl) = if id == MASTER {
             if processing_patch {
                 bail!("mic processing is only for microphones");
@@ -745,6 +794,11 @@ impl Engine {
                 src.processing.auto_level = on;
                 processing.set_auto_level(on);
             }
+            if let Some(on) = patch.echo_cancellation {
+                echo_toggled = on != src.processing.echo_cancellation;
+                src.processing.echo_cancellation = on;
+                processing.set_echo_cancellation(on);
+            }
             (&mut src.channel, ctrl)
         };
         if let Some(db) = patch.gain_db {
@@ -757,13 +811,19 @@ impl Engine {
         }
         self.apply_delays(&inner);
         self.bump(&mut inner);
+        drop(inner);
+        // Start or stop listening to what you hear now, not at the next tick.
+        if echo_toggled {
+            self.supervise();
+        }
         Ok(())
     }
 
-    /// Keeps the other sources in time with the mics' processing: noise
-    /// suppression's 10 ms always, and extra strength's 30 ms look-ahead if
-    /// the mic asks to (keep everything else in time). Each source is
-    /// delayed by how far it would otherwise be ahead.
+    /// Keeps the other sources in time with the mics' processing: echo
+    /// cancellation's 9 ms and noise suppression's 10 ms always, and extra
+    /// strength's 30 ms look-ahead if the mic asks to (keep everything else
+    /// in time). Each source is delayed by how far it would otherwise be
+    /// ahead.
     fn apply_delays(&self, inner: &Inner) {
         // (How late a source's audio is, how much of that to match.)
         let lateness = |s: &SourceConfig| {
@@ -772,8 +832,9 @@ impl Engine {
                 return (0, 0);
             }
             let extra = p.noise_gate && p.gate_mode == GateMode::Auto && p.extra_strength;
-            let late = crate::dsp::delay_frames(p.noise_suppression, extra);
-            let matched = crate::dsp::delay_frames(p.noise_suppression, extra && p.keep_in_time);
+            let (echo, suppress) = (p.echo_cancellation, p.noise_suppression);
+            let late = crate::dsp::delay_frames(echo, suppress, extra);
+            let matched = crate::dsp::delay_frames(echo, suppress, extra && p.keep_in_time);
             (late, matched)
         };
         let sources = &inner.config.sources;
@@ -1473,6 +1534,62 @@ impl Engine {
         true
     }
 
+    /// Starts, restarts, refuses or stops what a mic's echo cancellation
+    /// listens to, like [`Self::supervise_monitor`]; returns whether the
+    /// visible state changed.
+    fn supervise_echo(
+        &self,
+        rt: &mut SourceRuntime,
+        wanted: bool,
+        output: Option<&DeviceRef>,
+        default_output: Option<&DeviceInfo>,
+        now: Instant,
+    ) -> bool {
+        let e = &mut rt.echo;
+        if !wanted {
+            let active = e.worker.is_some() || e.key.is_some();
+            if active {
+                e.stop(&rt.processing);
+            }
+            return active;
+        }
+        let key = (
+            default_output.map(|d| d.id.clone()),
+            output.map(|d| d.id.clone()),
+        );
+        if e.key.as_ref() == Some(&key) {
+            match &e.worker {
+                Some(w) if !w.finished() => return false, // healthy
+                Some(_) if now < e.retry_at => return false,
+                None => return false, // refused; waits for a device change
+                Some(_) => {}         // failed: retry
+            }
+        }
+        e.stop(&rt.processing);
+        e.key = Some(key);
+        e.retry_at = now + RETRY_DELAY;
+        match default_output {
+            None => e.refuse("No default output to listen to".into()),
+            Some(dev) if output.is_some_and(|o| o.id == dev.id) => e.refuse(format!(
+                "Your Windows default output is “{}”, which the mix goes to, so it can't \
+                 hear what you hear. Set your speakers as the default output.",
+                dev.name
+            )),
+            Some(dev) => {
+                let (tx, rx) = rtrb::RingBuffer::new(crate::dsp::ECHO_RING);
+                rt.processing.set_reference(Some(rx));
+                let status = Arc::new(Mutex::new(Status::new("waiting", "Starting…")));
+                e.status = status.clone();
+                let (backend, changed, dev) =
+                    (self.backend.clone(), self.changed.clone(), dev.clone());
+                e.worker = Some(Worker::spawn("echo reference".into(), move |stop| {
+                    echo_reference_thread(&*backend, dev, tx, &status, &stop, &changed)
+                }));
+            }
+        }
+        true
+    }
+
     fn start_monitor(&self, m: &mut Monitor, device: DeviceInfo) {
         // A mixer gives us priming, drift trimming and gain ramps.
         let mut mixer = Mixer::new(Arc::new(ChannelControl::new(1.0, false)));
@@ -1551,7 +1668,12 @@ impl Engine {
         let default_input = wants_default
             .then(|| self.backend.default_input())
             .flatten();
-        let default_output = monitoring.then(|| self.backend.default_output()).flatten();
+        let echoing = sources
+            .iter()
+            .any(|s| matches!(s.kind, SourceKind::Device { .. }) && s.processing.echo_cancellation);
+        let default_output = (monitoring || echoing)
+            .then(|| self.backend.default_output())
+            .flatten();
         let alive: HashMap<u32, bool> = pids
             .into_iter()
             .map(|pid| (pid, self.backend.process_alive(pid)))
@@ -1601,6 +1723,9 @@ impl Engine {
             let Some(rt) = inner.sources.get_mut(&src.id) else {
                 continue;
             };
+            let echo =
+                matches!(src.kind, SourceKind::Device { .. }) && src.processing.echo_cancellation;
+            changed |= self.supervise_echo(rt, echo, output.as_ref(), default_output.as_ref(), now);
 
             if rt.capture.is_some()
                 && let Some(captured) = &rt.default_id
@@ -1816,6 +1941,7 @@ impl SourceRuntime {
                 control.set_extra_strength(p.extra_strength);
                 control.set_auto_level(p.auto_level);
                 control.set_level_db(p.auto_level_db);
+                control.set_echo_cancellation(p.echo_cancellation);
                 Arc::new(control)
             },
             status: Arc::new(Mutex::new(Status::new("waiting", "Starting…"))),
@@ -1823,6 +1949,7 @@ impl SourceRuntime {
             pid: None,
             default_id: None,
             retry_at: Instant::now(),
+            echo: EchoReference::new(),
         }
     }
 }
@@ -1978,6 +2105,42 @@ fn capture_thread(
         if let Err(e) = result {
             tracing::warn!("capture {target} stopped: {e:#}");
             report("error", format!("{e:#}"));
+            return;
+        }
+    }
+}
+
+/// Captures what's playing on `device` (what you hear) for a mic's echo
+/// cancellation.
+fn echo_reference_thread(
+    backend: &dyn Backend,
+    device: DeviceInfo,
+    mut tx: rtrb::Producer<f32>,
+    status: &SharedStatus,
+    stop: &AtomicBool,
+    changed: &tokio::sync::watch::Sender<u64>,
+) {
+    let report = |state, message: String| {
+        if !stop.load(Ordering::Relaxed) {
+            set_status(status, state, message);
+            changed.send_modify(|v| *v += 1);
+        }
+    };
+    backend.promote_audio_thread();
+    let mut stream = match backend.open_capture(&CaptureTarget::Output(Some(device.id.clone()))) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("echo cancellation: listening to {}: {e:#}", device.name);
+            report("error", format!("{}: {e:#}", device.name));
+            return;
+        }
+    };
+    tracing::info!("echo cancellation: listening to {}", device.name);
+    report("running", device.name.clone());
+    while !stop.load(Ordering::Relaxed) {
+        if let Err(e) = stream.read(&mut |data| push_frames(&mut tx, data)) {
+            tracing::warn!("echo cancellation: {} stopped: {e:#}", device.name);
+            report("error", format!("{}: {e:#}", device.name));
             return;
         }
     }
@@ -2768,11 +2931,11 @@ mod tests {
             ..Default::default()
         };
         engine.update_channel(&mic, suppress(true)).unwrap();
-        let frames = crate::dsp::delay_frames(true, true);
+        let frames = crate::dsp::delay_frames(false, true, true);
         assert_eq!(frames, 1_920, "40 ms");
         assert_eq!(delays(&engine)[0], ("a".into(), frames));
         engine.update_channel(&mic, manual).unwrap();
-        let ten_ms = crate::dsp::delay_frames(true, false);
+        let ten_ms = crate::dsp::delay_frames(false, true, false);
         assert_eq!(
             delays(&engine)[0],
             ("a".into(), ten_ms),
@@ -2780,6 +2943,13 @@ mod tests {
         );
         engine.update_channel(&mic, suppress(false)).unwrap();
         assert!(delays(&engine).is_empty(), "nothing to match");
+        // Echo cancellation's 9 ms, always matched.
+        let echo = ChannelPatch {
+            echo_cancellation: Some(true),
+            ..Default::default()
+        };
+        engine.update_channel(&mic, echo).unwrap();
+        assert_eq!(delays(&engine)[0], ("a".into(), crate::dsp::ECHO_DELAY));
         let src = engine
             .state()
             .sources
@@ -2794,6 +2964,60 @@ mod tests {
     }
 
     #[test]
+    fn echo_cancellation_listens_to_the_default_output() {
+        let engine = engine("cable");
+        let mic = engine
+            .add_source(None, SourceKind::Device { device: None })
+            .unwrap();
+        let echo = || {
+            let state = engine.state();
+            state
+                .sources
+                .into_iter()
+                .find(|s| s.id == mic)
+                .unwrap()
+                .echo_status
+        };
+        let switch = |on| ChannelPatch {
+            echo_cancellation: Some(on),
+            ..Default::default()
+        };
+        assert!(echo().is_none(), "off");
+
+        // It listens to the default output, "phones" (which tests can't
+        // capture, so it says so).
+        engine.update_channel(&mic, switch(true)).unwrap();
+        let mut status = echo().unwrap();
+        for _ in 0..300 {
+            if status.state == "error" {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+            status = echo().unwrap();
+        }
+        assert!(status.message.starts_with("phones:"), "{}", status.message);
+
+        // The mix going to the default output: it can't tell what you hear.
+        engine.set_output(Some(DeviceRef {
+            id: "phones".into(),
+            name: "phones".into(),
+        }));
+        engine.supervise();
+        let status = echo().unwrap();
+        assert_eq!(status.state, "error");
+        assert!(
+            status.message.contains("which the mix goes to"),
+            "{}",
+            status.message
+        );
+
+        engine.update_channel(&mic, switch(false)).unwrap();
+        assert!(echo().is_none());
+        let inner = engine.inner.lock().unwrap();
+        assert!(inner.sources[&mic].echo.worker.is_none(), "stopped");
+    }
+
+    #[test]
     fn processing_is_for_microphones_only() {
         let engine = engine("cable");
         let suppress = || ChannelPatch {
@@ -2805,6 +3029,12 @@ mod tests {
             "app source"
         );
         assert!(engine.update_channel(MASTER, suppress()).is_err());
+        let echo = || ChannelPatch {
+            echo_cancellation: Some(true),
+            ..Default::default()
+        };
+        assert!(engine.update_channel("a", echo()).is_err(), "app source");
+        assert!(engine.update_channel(MASTER, echo()).is_err());
 
         let mic = engine
             .add_source(None, SourceKind::Device { device: None })

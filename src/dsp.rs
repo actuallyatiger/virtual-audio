@@ -1,6 +1,14 @@
 //! Microphone clean-up, applied in a device source's capture thread before
-//! its audio reaches the mixer: RNNoise noise suppression, automatic level
-//! and a noise gate.
+//! its audio reaches the mixer: echo cancellation, RNNoise noise
+//! suppression, automatic level and a noise gate.
+//!
+//! Echo cancellation is WebRTC's (AEC3, through the sonora crate, a Rust
+//! port): it is fed what you hear (a loopback of the Windows default output,
+//! which the engine captures) and removes it from the mic first, as WebRTC
+//! does, so on speakers others don't hear themselves. It delays the mic by
+//! [`ECHO_DELAY`]. Unlike the rest of this module it allocates as it goes
+//! (small, short-lived buffers inside sonora), which can't be avoided short of
+//! forking it; it's only while echo cancellation is on.
 //!
 //! The gate is either manual (opens above a level you set) or automatic: it
 //! opens when RNNoise's voice detector hears speech and the level is
@@ -53,12 +61,27 @@ const LOOKAHEAD: usize = 3;
 /// How much extra strength delays the mic (30 ms), in frames of audio.
 pub const LOOKAHEAD_FRAMES: usize = LOOKAHEAD * FRAME;
 
+/// How much echo cancellation delays the mic, in frames (about 9 ms): AEC3
+/// works on frequency bands, in blocks.
+pub const ECHO_DELAY: usize = 430;
+/// Echo cancellation keeps up to 200 ms of what you hear waiting for the
+/// mic; beyond that, the oldest is dropped so it stays current.
+const ECHO_BACKLOG: usize = 20 * FRAME * CHANNELS;
+/// The ring the engine feeds what you hear into (interleaved stereo).
+pub const ECHO_RING: usize = 2 * ECHO_BACKLOG;
+/// Frames in a row with nothing heard that are taken for audio arriving late
+/// (more is a gap: nothing playing).
+const ECHO_LATE: u32 = 3;
+
 /// How far behind its input a mic's processed audio comes out, in frames:
-/// RNNoise's output lags by one frame (10 ms), and extra strength's
-/// look-ahead adds 30 ms. (Gathering 10 ms frames adds up to another 10 ms,
-/// but none while the input arrives in 10 ms blocks, as it usually does.)
-pub fn delay_frames(suppress: bool, extra_strength: bool) -> usize {
-    (if suppress { FRAME } else { 0 }) + if extra_strength { LOOKAHEAD_FRAMES } else { 0 }
+/// echo cancellation's [`ECHO_DELAY`], RNNoise's output lags by one frame
+/// (10 ms), and extra strength's look-ahead adds 30 ms. (Gathering 10 ms
+/// frames adds up to another 10 ms, but none while the input arrives in
+/// 10 ms blocks, as it usually does.)
+pub fn delay_frames(echo: bool, suppress: bool, extra_strength: bool) -> usize {
+    (if echo { ECHO_DELAY } else { 0 })
+        + (if suppress { FRAME } else { 0 })
+        + if extra_strength { LOOKAHEAD_FRAMES } else { 0 }
 }
 /// Automatic level, after WebRTC's AGC2: the voice probability a frame
 /// needs to count as speech, and how many in a row (120 ms) before they
@@ -113,6 +136,10 @@ pub struct ProcessingControl {
     /// Extra strength: the automatic gate also ignores knocks and clicks.
     extra_strength: AtomicBool,
     auto_level: AtomicBool,
+    echo: AtomicBool,
+    /// What you hear, for echo cancellation (interleaved stereo), while the
+    /// engine captures it. The capture thread only `try_lock`s it.
+    reference: std::sync::Mutex<Option<rtrb::Consumer<f32>>>,
     /// Automatic level's adjustment now (dB), shown in the UI and where it
     /// starts again after the capture restarts.
     level_db: AtomicU32,
@@ -132,6 +159,8 @@ impl ProcessingControl {
             threshold_db: AtomicU32::new(threshold_db.to_bits()),
             extra_strength: AtomicBool::new(false),
             auto_level: AtomicBool::new(false),
+            echo: AtomicBool::new(false),
+            reference: std::sync::Mutex::new(None),
             level_db: AtomicU32::new(0f32.to_bits()),
             level: AtomicU32::new(0f32.to_bits()),
             input_level: AtomicU32::new(0f32.to_bits()),
@@ -155,6 +184,14 @@ impl ProcessingControl {
     }
     pub fn auto_level(&self) -> bool {
         self.auto_level.load(Ordering::Relaxed)
+    }
+    pub fn set_echo_cancellation(&self, on: bool) {
+        self.echo.store(on, Ordering::Relaxed);
+    }
+    /// Hands echo cancellation what you hear (`None` while there's nothing
+    /// to listen to).
+    pub fn set_reference(&self, reference: Option<rtrb::Consumer<f32>>) {
+        *self.reference.lock().unwrap_or_else(|e| e.into_inner()) = reference;
     }
     /// Automatic level's adjustment (dB), also while it is off (where it
     /// starts when turned back on).
@@ -226,6 +263,15 @@ pub struct Processor {
     level_gain: f32,
     /// The most gain each sample of the frame may have (see `auto_level`).
     level_caps: [f32; FRAME],
+    /// Echo cancellation while it's on, and room for a frame of what you
+    /// hear (mono) and of its output.
+    echo: Option<Box<sonora::AudioProcessing>>,
+    /// Mic frames in a row with nothing heard, and how many frames of
+    /// silence stood in for audio that's late, to skip when it comes.
+    starved: u32,
+    owed: u32,
+    far: [f32; FRAME],
+    echo_out: [f32; FRAME],
 }
 
 impl Processor {
@@ -248,6 +294,11 @@ impl Processor {
             level_db: ctrl.level_db(),
             level_gain: 1.0,
             level_caps: [0.0; FRAME],
+            echo: None,
+            starved: 0,
+            owed: 0,
+            far: [0.0; FRAME],
+            echo_out: [0.0; FRAME],
             ctrl,
         }
     }
@@ -262,10 +313,18 @@ impl Processor {
         let suppress = self.ctrl.suppress.load(Ordering::Relaxed);
         let gate = self.ctrl.gate.load(Ordering::Relaxed);
         let levelling = self.ctrl.auto_level();
-        // (While extra strength's held-back frames remain, or automatic
-        // level's gain is still returning to 1, frames go through run_frame
-        // until that's done.)
-        if !suppress && !gate && !levelling && self.ahead.is_empty() && self.level_gain == 1.0 {
+        let echo = self.ctrl.echo.load(Ordering::Relaxed);
+        // (While extra strength's held-back frames remain, automatic level's
+        // gain is still returning to 1, or echo cancellation is fading out,
+        // frames go through run_frame until that's done.)
+        if !suppress
+            && !gate
+            && !levelling
+            && !echo
+            && self.echo.is_none()
+            && self.ahead.is_empty()
+            && self.level_gain == 1.0
+        {
             self.denoise = None;
             self.gain = 1.0;
             self.hold = 0;
@@ -286,6 +345,9 @@ impl Processor {
             self.pending
                 .push(frame.iter().sum::<f32>() / CHANNELS as f32);
             if self.pending.len() == FRAME {
+                if echo || self.echo.is_some() {
+                    self.cancel_echo(echo);
+                }
                 self.run_frame(suppress, gate, levelling);
                 if !self.out.is_empty() {
                     sink(&self.out);
@@ -382,6 +444,74 @@ impl Processor {
         emit(&mut self.out, &mut self.gain, &self.frame, target);
     }
 
+    /// Removes what you hear from the frame in `pending`, first feeding
+    /// echo cancellation what has arrived of it. Switched on or off (`on`),
+    /// it crossfades over the frame between the mic as it is and the
+    /// cancelled mic (9 ms later), rather than jump between them.
+    fn cancel_echo(&mut self, on: bool) {
+        let starting = self.echo.is_none();
+        let echo = self.echo.get_or_insert_with(|| Box::new(echo_canceller()));
+        let mut arrived = 0;
+        if let Ok(mut reference) = self.ctrl.reference.try_lock()
+            && let Some(rx) = reference.as_mut()
+        {
+            let block = FRAME * CHANNELS;
+            while rx.slots() > ECHO_BACKLOG {
+                if let Ok(old) = rx.read_chunk(block) {
+                    old.commit_all();
+                }
+            }
+            while let Ok(chunk) = rx.read_chunk(block) {
+                arrived += 1;
+                if self.owed > 0 {
+                    // Silence already stood in for it.
+                    self.owed -= 1;
+                    chunk.commit_all();
+                    continue;
+                }
+                let (a, b) = chunk.as_slices();
+                let mut samples = a.iter().chain(b);
+                for s in &mut self.far {
+                    let (l, r) = (samples.next(), samples.next());
+                    *s = (l.copied().unwrap_or(0.0) + r.copied().unwrap_or(0.0)) * 0.5;
+                }
+                chunk.commit_all();
+                let _ = echo.process_render_f32(&[&self.far], &mut [&mut self.echo_out]);
+            }
+        }
+        // Windows sends nothing while nothing plays, and a mic frame with
+        // nothing to compare it with makes the canceller forget the echo's
+        // delay, so it leaks echo whenever sound starts again. So it hears
+        // silence instead, a frame for each of the mic's. If the audio was
+        // only late, it's skipped when it comes, to stay in time.
+        if arrived > 0 {
+            self.starved = 0;
+        } else {
+            self.starved += 1;
+            self.owed = if self.starved > ECHO_LATE {
+                0
+            } else {
+                self.owed + 1
+            };
+            self.far.fill(0.0);
+            let _ = echo.process_render_f32(&[&self.far], &mut [&mut self.echo_out]);
+        }
+        let _ = echo.process_capture_f32(&[&self.pending], &mut [&mut self.echo_out]);
+        if on && !starting {
+            self.pending.copy_from_slice(&self.echo_out);
+            return;
+        }
+        // Switched on (from the mic as it is) or off (back to it).
+        for (i, (raw, cancelled)) in self.pending.iter_mut().zip(&self.echo_out).enumerate() {
+            let t = (i + 1) as f32 / FRAME as f32;
+            let t = if on { t } else { 1.0 - t };
+            *raw = *raw * (1.0 - t) + cancelled * t;
+        }
+        if !on {
+            self.echo = None;
+        }
+    }
+
     /// Automatic level: learns the speech level from frames that are
     /// speech (`voice` probability; 0 for frames that mustn't count) with
     /// `peak` (linear), and during runs of them turns towards the target.
@@ -474,6 +604,31 @@ impl Processor {
             .level
             .store(self.level.to_bits(), Ordering::Relaxed);
     }
+}
+
+/// WebRTC's echo canceller, for mono 48 kHz frames. It tells there's no
+/// echo (headphones) with the HMM detector, which learns that within seconds
+/// rather than muting your voice under game audio for ten. Fed a frame of
+/// silence to start: until it has heard anything, it delays the mic less, and
+/// it would jump to [`ECHO_DELAY`] the moment something played.
+fn echo_canceller() -> sonora::AudioProcessing {
+    use sonora::config::{EchoCanceller, TransparentModeType};
+    use sonora::{Config, StreamConfig};
+    let format = StreamConfig::new(SAMPLE_RATE, 1);
+    let mut echo = sonora::AudioProcessing::builder()
+        .config(Config {
+            echo_canceller: Some(EchoCanceller {
+                transparent_mode: TransparentModeType::Hmm,
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .capture_config(format)
+        .render_config(format)
+        .build();
+    let (silence, mut out) = ([0.0; FRAME], [0.0; FRAME]);
+    let _ = echo.process_render_f32(&[&silence], &mut [&mut out]);
+    echo
 }
 
 /// Automatic level's measure of speech, as WebRTC's AGC2 keeps it.
@@ -1058,5 +1213,236 @@ mod auto_level_tests {
         let out = run(&mut p, rest);
         // One frame to ramp back to 1, then untouched.
         assert_eq!(&out[FRAME * CHANNELS..], &rest[FRAME * CHANNELS..]);
+    }
+}
+
+#[cfg(test)]
+mod echo_tests {
+    use super::*;
+    use crate::mixer::push_frames;
+    use std::sync::Arc;
+
+    fn speech(gain: f32) -> Vec<f32> {
+        let file = include_bytes!("testdata/speech.ogg").to_vec();
+        let audio = crate::soundboard::decode(file, Some("ogg")).unwrap();
+        audio.iter().map(|s| s * gain).collect()
+    }
+
+    fn db(audio: &[f32]) -> f32 {
+        10.0 * (audio.iter().map(|s| s * s).sum::<f32>() / audio.len() as f32).log10()
+    }
+
+    /// A mic with echo cancellation, and where it hears what you hear.
+    fn cancelling() -> (Processor, rtrb::Producer<f32>) {
+        let ctrl = Arc::new(ProcessingControl::new(false, false, false, -45.0));
+        ctrl.set_echo_cancellation(true);
+        let (tx, rx) = rtrb::RingBuffer::new(ECHO_RING);
+        ctrl.set_reference(Some(rx));
+        (Processor::new(ctrl), tx)
+    }
+
+    /// Plays `heard` while the mic picks up `mic`, 10 ms at a time.
+    fn run(
+        p: &mut Processor,
+        tx: &mut rtrb::Producer<f32>,
+        heard: &[f32],
+        mic: &[f32],
+    ) -> Vec<f32> {
+        let mut out = Vec::new();
+        let block = FRAME * CHANNELS;
+        for (i, m) in mic.chunks(block).enumerate() {
+            if let Some(h) = heard.chunks(block).nth(i) {
+                push_frames(tx, h);
+            }
+            p.process(m, &mut |d| out.extend_from_slice(d));
+        }
+        out
+    }
+
+    /// Speakers across the room: what you hear reaches the mic 40 ms later
+    /// and quieter.
+    fn echo_of(heard: &[f32]) -> Vec<f32> {
+        let delay = 48 * 40 * CHANNELS;
+        let mut mic = vec![0.0; heard.len()];
+        for (m, h) in mic[delay..].iter_mut().zip(heard) {
+            *m = h * 0.6;
+        }
+        mic
+    }
+
+    #[test]
+    fn removes_what_you_hear_from_the_mic() {
+        let heard: Vec<f32> = speech(0.5).repeat(3);
+        let mic = echo_of(&heard);
+        let (mut p, mut tx) = cancelling();
+        let out = run(&mut p, &mut tx, &heard, &mic);
+        // Once it has learnt the room (the last phrase).
+        let last = heard.len() * 2 / 3..out.len();
+        let removed = db(&mic[last.clone()]) - db(&out[last]);
+        assert!(removed > 25.0, "{removed} dB");
+    }
+
+    #[test]
+    fn keeps_up_when_windows_sends_nothing_between_sounds() {
+        // Phrases with a second of silence between them. Windows sends
+        // nothing for the silence; it must work as well as if it had.
+        let gap = vec![0.0; 48_000 * CHANNELS];
+        let phrase = speech(0.5);
+        let heard = [&phrase[..], &gap, &phrase, &gap, &phrase].concat();
+        let mic = echo_of(&heard);
+        let removed = |send_silence: bool| {
+            let (mut p, mut tx) = cancelling();
+            let mut out = Vec::new();
+            let block = FRAME * CHANNELS;
+            for (h, m) in heard.chunks(block).zip(mic.chunks(block)) {
+                if send_silence || h.iter().any(|&s| s != 0.0) {
+                    push_frames(&mut tx, h);
+                }
+                p.process(m, &mut |d| out.extend_from_slice(d));
+            }
+            // Half a second after the last gap.
+            let after = heard.len() - phrase.len();
+            let r = after..after + 24_000 * CHANNELS;
+            db(&mic[r.clone()]) - db(&out[r])
+        };
+        let (sent, nothing) = (removed(true), removed(false));
+        assert!(nothing > sent - 3.0, "{nothing} dB, against {sent} dB");
+    }
+
+    #[test]
+    fn copes_with_what_you_hear_arriving_unevenly() {
+        // Every few frames, what you hear comes a frame late, two at once.
+        let heard: Vec<f32> = speech(0.5).repeat(3);
+        let mic = echo_of(&heard);
+        let removed = |uneven: bool| {
+            let (mut p, mut tx) = cancelling();
+            let mut out = Vec::new();
+            let block = FRAME * CHANNELS;
+            let blocks: Vec<&[f32]> = heard.chunks(block).collect();
+            let mut late: Option<&[f32]> = None;
+            for (i, m) in mic.chunks(block).enumerate() {
+                if uneven && i % 5 == 3 {
+                    late = Some(blocks[i]);
+                } else {
+                    if let Some(l) = late.take() {
+                        push_frames(&mut tx, l);
+                    }
+                    push_frames(&mut tx, blocks[i]);
+                }
+                p.process(m, &mut |d| out.extend_from_slice(d));
+            }
+            let last = heard.len() * 2 / 3..out.len();
+            db(&mic[last.clone()]) - db(&out[last])
+        };
+        let (even, uneven) = (removed(false), removed(true));
+        assert!(uneven > 25.0, "{uneven} dB, against {even} dB evenly");
+    }
+
+    #[test]
+    fn switching_on_and_off_doesnt_click() {
+        let ctrl = Arc::new(ProcessingControl::new(false, false, false, -45.0));
+        let mut p = Processor::new(ctrl.clone());
+        let tone: Vec<f32> = (0..48_000 * 2)
+            .flat_map(|i| {
+                [(i as f32 * 2.0 * std::f32::consts::PI * 440.0 / 48_000.0).sin() * 0.3; CHANNELS]
+            })
+            .collect();
+        let mut out = Vec::new();
+        for (i, block) in tone.chunks(FRAME * CHANNELS).enumerate() {
+            // On at 0.5 s, off at 1.5 s.
+            if i == 50 || i == 150 {
+                ctrl.set_echo_cancellation(i == 50);
+            }
+            p.process(block, &mut |d| out.extend_from_slice(d));
+        }
+        let jump = out
+            .chunks(CHANNELS)
+            .zip(out.chunks(CHANNELS).skip(1))
+            .map(|(a, b)| (a[0] - b[0]).abs())
+            .fold(0.0, f32::max);
+        // A 440 Hz tone at 0.3 moves at most 0.017 a sample.
+        assert!(jump < 0.05, "jumped {jump}");
+    }
+
+    #[test]
+    fn keeps_your_voice_while_others_talk() {
+        let heard: Vec<f32> = speech(0.5).repeat(3);
+        let mut mic = echo_of(&heard);
+        // You talk (the phrase backwards: not the same words) over the
+        // last of it.
+        let you: Vec<f32> = speech(0.3).into_iter().rev().collect();
+        let start = mic.len() - you.len();
+        for (m, y) in mic[start..].iter_mut().zip(&you) {
+            *m += y;
+        }
+        let (mut p, mut tx) = cancelling();
+        let out = run(&mut p, &mut tx, &heard, &mic);
+        let late = ECHO_DELAY * CHANNELS;
+        let yours = &out[start + late..];
+        let kept = db(yours) - db(&you[..yours.len()]);
+        assert!(kept.abs() < 3.0, "your voice changed by {kept} dB");
+    }
+
+    #[test]
+    fn with_headphones_on_it_soon_stops_muting_you() {
+        // Game audio plays, but none of it reaches the mic: you talk now and
+        // then (half a second every two).
+        let game: Vec<f32> = (0..48_000 * 6)
+            .flat_map(|i| [((i as f32) * 0.05).sin() * 0.3; CHANNELS])
+            .collect();
+        let you: Vec<f32> = speech(0.3).repeat(2);
+        let mic: Vec<f32> = (0..game.len())
+            .map(|i| {
+                if (i / CHANNELS) % 96_000 < 24_000 {
+                    you[i % you.len()]
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        let (mut p, mut tx) = cancelling();
+        let out = run(&mut p, &mut tx, &game, &mic);
+        // The second time you talk, 2 s in. (WebRTC's default detector
+        // still mutes you by 60 dB then.)
+        let late = ECHO_DELAY * CHANNELS;
+        let talk = 96_000 * CHANNELS..120_000 * CHANNELS;
+        let kept = db(&out[talk.start + late..talk.end + late]) - db(&mic[talk]);
+        assert!(kept > -4.0, "muted by {kept} dB");
+    }
+
+    #[test]
+    fn with_nothing_playing_the_mic_comes_through_echo_delay_late() {
+        let (mut p, mut tx) = cancelling();
+        let mut seed = 7u32;
+        let mic: Vec<f32> = (0..48_000)
+            .flat_map(|i| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let v = ((seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 0.4;
+                [if (12_000..36_000).contains(&i) {
+                    v
+                } else {
+                    0.0
+                }; CHANNELS]
+            })
+            .collect();
+        let out = run(&mut p, &mut tx, &[], &mic);
+        let lag = (0..1_000)
+            .max_by(|&a, &b| {
+                let c = |l: usize| {
+                    (20_000..30_000)
+                        .map(|i| mic[i * CHANNELS] * out[(i + l) * CHANNELS])
+                        .sum::<f32>()
+                };
+                c(a).total_cmp(&c(b))
+            })
+            .unwrap();
+        assert_eq!(lag, ECHO_DELAY, "delay_frames must match");
+        let (i, o) = (
+            &mic[20_000 * 2..30_000 * 2],
+            &out[(20_000 + lag) * 2..(30_000 + lag) * 2],
+        );
+        // (Hiss loses its top octave, which echo cancellation band-limits;
+        // speech has little up there.)
+        assert!((db(o) - db(i)).abs() < 4.0, "{} → {} dB", db(i), db(o));
     }
 }

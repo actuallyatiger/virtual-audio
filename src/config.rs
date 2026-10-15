@@ -200,6 +200,9 @@ pub struct Processing {
     /// Automatic level's adjustment (dB) when last saved, so it starts there
     /// rather than learning your voice again.
     pub auto_level_db: f32,
+    /// Remove what you hear (the Windows default output) from the mic, for
+    /// speakers rather than headphones.
+    pub echo_cancellation: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -223,6 +226,7 @@ impl Default for Processing {
             keep_in_time: false,
             auto_level: false,
             auto_level_db: 0.0,
+            echo_cancellation: false,
         }
     }
 }

@@ -508,7 +508,7 @@ function renderStrips() {
     }
     if (ch.kind === "device") {
       // The cog lights up while any processing is on.
-      const on = [ch.noise_suppression && "noise suppression", ch.auto_level && "automatic level", ch.noise_gate && `${ch.gate_mode === "auto" ? "automatic" : "manual"} noise gate`].filter(Boolean);
+      const on = [ch.echo_cancellation && "echo cancellation", ch.noise_suppression && "noise suppression", ch.auto_level && "automatic level", ch.noise_gate && `${ch.gate_mode === "auto" ? "automatic" : "manual"} noise gate`].filter(Boolean);
       const summary = `Mic processing: ${on.length ? on.join(", ") : "off"}`;
       p.settings.classList.toggle("on", on.length > 0);
       p.settings.title = summary;
@@ -701,6 +701,9 @@ function setupChecks() {
   }
   for (const s of state.sources) {
     if (s.kind !== "device" && s.status.state === "error") add("warn", `${s.name} isn't working`, s.status.message);
+    // (Not again when the cable is the default output: that's said above.)
+    const cableIsDefault = defOut && out && defOut.id === out.id;
+    if (s.echo_status?.state === "error" && !cableIsDefault) add("warn", `${s.name}'s echo cancellation isn't working`, sentence(s.echo_status.message), { help: "help-trouble" });
   }
   if (state.hear_status.state === "error") add("warn", "Hear sounds can't play", state.hear_status.message, { help: "help-trouble" });
   if (state.monitor.state === "error") add("warn", "Listen can't play", state.monitor.message, { help: "help-trouble" });
@@ -783,6 +786,17 @@ function renderMicDialog() {
     return;
   }
   $("#mic-title").textContent = `Mic processing: ${src.name}`;
+  $("#mic-echo").checked = src.echo_cancellation;
+  const echo = src.echo_status;
+  const echoError = echo?.state === "error";
+  $("#mic-echo-now").classList.toggle("bad", echoError);
+  $("#mic-echo-now").textContent = !echo
+    ? ""
+    : echo.state === "running"
+      ? `Listening to ${echo.message}.`
+      : echoError
+        ? sentence(echo.message)
+        : "";
   $("#mic-suppress").checked = src.noise_suppression;
   $("#mic-auto-level").checked = src.auto_level;
   $("#mic-gate").checked = src.noise_gate;
@@ -809,6 +823,7 @@ function showThreshold(db) {
 }
 
 const patchMic = (body) => attempt(api("PATCH", `/api/channels/${micDialogId}`, body));
+$("#mic-echo").addEventListener("change", (e) => patchMic({ echo_cancellation: e.target.checked }));
 $("#mic-suppress").addEventListener("change", (e) => patchMic({ noise_suppression: e.target.checked }));
 $("#mic-auto-level").addEventListener("change", (e) => patchMic({ auto_level: e.target.checked }));
 $("#mic-gate").addEventListener("change", (e) => {
