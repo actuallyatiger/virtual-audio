@@ -52,7 +52,9 @@ Versions follow [SemVer](https://semver.org) and come from the
    with the changelog. The Windows `virtual-audio-mixer.exe` is built,
    signed with minisign (the `MINISIGN_SECRET_KEY` secret, plus
    `MINISIGN_PASSWORD` if the key has one; the signature is appended to the
-   exe) and attached, and then the release is published. Installed copies
+   exe, or beside it once releases are code-signed for Windows) and attached,
+   and then the release is published. Setting up code signing is in the
+   `release` skill. Installed copies
    update themselves from it (see [architecture](architecture.md#updates)).
 
 The app shows its version in the tray menu and at the bottom of Help, and

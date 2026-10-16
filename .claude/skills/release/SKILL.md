@@ -16,17 +16,57 @@ Releases are automated by release-please (`.github/workflows/release.yml`,
    `CHANGELOG.md`.
 2. **Merging that PR is the release.** release-please tags `vx.y.z` and
    makes a draft GitHub Release with that changelog section. The workflow's
-   Windows job builds `virtual-audio-mixer.exe`, and the publish job signs
-   it (appending the signature to the exe, which installed copies check
-   before updating themselves), attaches it and publishes the release, so a
-   published release always has the signed exe.
+   Windows job builds `virtual-audio-mixer.exe` (and code-signs it for
+   Windows, once that's set up: see below), and the publish job signs it
+   with minisign (the signature installed copies check before updating
+   themselves), attaches it and publishes the release, so a published
+   release always has the signed exe.
 3. `releases/latest/download/virtual-audio-mixer.exe` always points at the newest,
    and the README links there.
 
 To cut a release: check the release PR's changelog reads well, and merge it
 (rebase or merge both work). Then check the Release workflow run went green
-and the release has `virtual-audio-mixer.exe` attached. A signed exe ends
-in `VAMSIG01` (without the signature, installed copies won't update to it).
+and the release has `virtual-audio-mixer.exe` attached. Its minisign
+signature is either appended to it (the exe ends in `VAMSIG01`) or, for a
+code-signed exe, beside it as `virtual-audio-mixer.exe.minisig`. Without
+either, installed copies won't update to it.
+
+## Code signing for Windows
+
+Unsigned exes get SmartScreen's "unrecognised app" warning, browsers warn
+on download, and Defender's behaviour detection has flagged and removed the
+administrator copy (`Behavior:Win32/Execution.A!ml`, #42). Releases can be
+Authenticode-signed through [SignPath](https://signpath.io), which signs
+open-source projects for free through the SignPath Foundation. The private
+key stays with SignPath; CI only ever holds an API token.
+
+The workflow signs only when the `SIGNPATH_API_TOKEN` secret is set, and
+otherwise releases unsigned as before. To set it up:
+
+1. **First, release a version with the updater that reads
+   `virtual-audio-mixer.exe.minisig`** (added with this section), and let
+   copies update to it. A code-signed exe can't carry its minisign
+   signature appended (that breaks Windows' check), so older versions,
+   which only read the appended one, can't install a code-signed release by
+   themselves: their users would have to download it by hand.
+2. Apply to the SignPath Foundation for an open-source certificate, for
+   this repository.
+3. In SignPath, create a project for it with:
+   - a GitHub trusted build system, linked to the repository;
+   - an artifact configuration for the GitHub artifact, a zip holding the
+     exe: `<zip-file><pe-file path="virtual-audio-mixer.exe"><authenticode-sign/></pe-file></zip-file>`;
+   - a signing policy, `release-signing` unless the variable below names
+     another.
+4. In the repository's **Settings → Secrets and variables → Actions**:
+   - secret `SIGNPATH_API_TOKEN`: a SignPath CI user's API token;
+   - variables `SIGNPATH_ORGANIZATION_ID` and `SIGNPATH_PROJECT_SLUG`, and
+     `SIGNPATH_SIGNING_POLICY_SLUG` if the policy isn't `release-signing`.
+5. The next release's exe shows a valid signature under Properties →
+   Digital Signatures, and has `virtual-audio-mixer.exe.minisig` beside it.
+
+Only releases are code-signed. CI's test builds stay unsigned, so Windows
+may still warn about them. SmartScreen's trust also builds up as signed
+releases get downloaded, rather than at once.
 
 ## Versions
 
@@ -76,8 +116,8 @@ in `VAMSIG01` (without the signature, installed copies won't update to it).
   and publish with `gh release edit vx.y.z --draft=false --latest`.
 - Never hand-edit `version` in `Cargo.toml` or the manifest outside a release
   PR: release-please owns them.
-- Release PRs opened by the workflow's token don't trigger the CI workflow;
-  `main` was already green, and the release PR only changes the version and
-  changelog. If branch protection ever requires CI checks, the release PR
-  can't merge until release-please runs with a personal access token or a
-  GitHub App token instead.
+- CI on a release PR (opened by `github-actions`) waits for a maintainer's
+  approval ("This workflow requires approval"). It can be skipped: `main`
+  was already green, and the release PR only changes the version and
+  changelog. If branch protection ever requires CI checks, approve the run,
+  or have release-please use a personal access token or a GitHub App token.

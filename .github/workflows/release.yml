@@ -35,6 +35,13 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: read
+      actions: read # SignPath fetches the unsigned build
+    outputs:
+      code_signed: ${{ steps.pick.outputs.code_signed }}
+    env:
+      # Code signing (Authenticode, through SignPath) once it's set up: see
+      # the release skill. Until then releases go out unsigned for Windows.
+      CODE_SIGNING: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,9 +54,36 @@ jobs:
         env:
           VAM_RELEASE: "1"
       - uses: actions/upload-artifact@v4
+        id: unsigned
+        if: ${{ env.CODE_SIGNING == 'true' }}
+        with:
+          name: unsigned
+          path: target/release/virtual-audio-mixer.exe
+          if-no-files-found: error
+      - uses: signpath/github-action-submit-signing-request@v1
+        if: ${{ env.CODE_SIGNING == 'true' }}
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          output-artifact-directory: signed
+      - name: Pick the exe
+        id: pick
+        shell: bash
+        run: |
+          mkdir out
+          if [ "$CODE_SIGNING" = true ]; then
+            cp signed/virtual-audio-mixer.exe out/
+          else
+            cp target/release/virtual-audio-mixer.exe out/
+          fi
+          echo "code_signed=$CODE_SIGNING" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
         with:
           name: virtual-audio-mixer
-          path: target/release/virtual-audio-mixer.exe
+          path: out/virtual-audio-mixer.exe
           if-no-files-found: error
 
   publish:
@@ -65,8 +99,10 @@ jobs:
       # The app only installs updates signed by the release key, and the
       # trusted comment names the version (src/update.rs). The signature is
       # appended to the exe, then its length in 8 digits and VAMSIG01, so a
-      # release is one file. No key, no release: an unsigned exe would never
-      # be installed as an update.
+      # release is one file; but a code-signed exe would no longer pass
+      # Windows' check with anything appended, so its signature goes beside
+      # it as virtual-audio-mixer.exe.minisig. No key, no release: an
+      # unsigned exe would never be installed as an update.
       - run: sudo apt-get install -y -q minisign
       - name: Sign
         run: |
@@ -81,15 +117,23 @@ jobs:
           printf '%s\n' "$MINISIGN_PASSWORD" |
             minisign -S -s "$key" -m virtual-audio-mixer.exe -x "$RUNNER_TEMP/exe.minisig" \
               -t "virtual-audio-mixer ${TAG#v}"
-          cat "$RUNNER_TEMP/exe.minisig" >> virtual-audio-mixer.exe
-          printf '%08dVAMSIG01' "$(stat -c %s "$RUNNER_TEMP/exe.minisig")" >> virtual-audio-mixer.exe
+          if [ "$CODE_SIGNED" = true ]; then
+            cp "$RUNNER_TEMP/exe.minisig" virtual-audio-mixer.exe.minisig
+          else
+            cat "$RUNNER_TEMP/exe.minisig" >> virtual-audio-mixer.exe
+            printf '%08dVAMSIG01' "$(stat -c %s "$RUNNER_TEMP/exe.minisig")" >> virtual-audio-mixer.exe
+          fi
         env:
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
           MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
           TAG: ${{ needs.release-please.outputs.tag_name }}
+          CODE_SIGNED: ${{ needs.build.outputs.code_signed }}
       # Always named virtual-audio-mixer.exe, so
       # releases/latest/download/virtual-audio-mixer.exe keeps working.
       - run: |
+          if [ -f virtual-audio-mixer.exe.minisig ]; then
+            gh release upload "$TAG" virtual-audio-mixer.exe.minisig --clobber
+          fi
           gh release upload "$TAG" virtual-audio-mixer.exe --clobber
           gh release edit "$TAG" --draft=false --latest
         env:

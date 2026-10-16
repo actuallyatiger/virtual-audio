@@ -13,9 +13,12 @@
 //! copy running.
 //!
 //! The signature travels inside the exe, appended after the program (Windows
-//! ignores what follows it), so a release is one file. Its trusted comment
-//! names the version, so an old signed build can't be passed off as a newer
-//! one.
+//! ignores what follows it), so a release is one file; or, once releases are
+//! code-signed for Windows (which anything appended would break), beside it
+//! as `virtual-audio-mixer.exe.minisig`. Either way a downloaded update is
+//! kept with its signature appended, and installed without it. Its trusted
+//! comment names the version, so an old signed build can't be passed off as
+//! a newer one.
 
 use crate::VERSION;
 use crate::config::UpdateMode;
@@ -37,6 +40,8 @@ const PUBLIC_KEY: &str = "RWTQGe5PYD7BfREzqd5oovZVKaVFRGNVGLm2VEYfTSk31I3cetfTLL
 /// carries the new address, and the parser for the new host's format.
 const LATEST: &str = "https://api.github.com/repos/actuallyatiger/virtual-audio/releases/latest";
 const ASSET: &str = "virtual-audio-mixer.exe";
+/// The signature, when it isn't in the exe (see `release.yml`).
+const SIGNATURE_ASSET: &str = "virtual-audio-mixer.exe.minisig";
 /// What CI signs into each signature's trusted comment, before the version.
 const COMMENT: &str = "virtual-audio-mixer ";
 const MAX_DOWNLOAD: u64 = 64 << 20;
@@ -292,7 +297,16 @@ impl Updater {
                 .read_to_vec()?)
         };
         let failed = || format!("couldn't download version {}", release.version);
-        let file = fetch(&release.exe_url).with_context(failed)?;
+        let file = match &release.signature_url {
+            Some(url) => {
+                let exe = fetch(&release.exe_url).with_context(failed)?;
+                let signature = String::from_utf8(fetch(url).with_context(failed)?)
+                    .map_err(|_| anyhow!("the signature isn't text"))
+                    .with_context(failed)?;
+                with_signature(&exe, &signature)
+            }
+            None => fetch(&release.exe_url).with_context(failed)?,
+        };
         verify_signed(PUBLIC_KEY, &file, &release.version).with_context(failed)?;
         stage(&file).with_context(failed)?;
         tracing::info!("update {} downloaded and verified", release.version);
@@ -351,6 +365,8 @@ struct Release {
     version: String,
     notes_url: Option<String>,
     exe_url: String,
+    /// The signature, when it isn't appended to the exe.
+    signature_url: Option<String>,
 }
 
 /// The parts of GitHub's latest-release JSON an update needs. Nothing here
@@ -377,6 +393,7 @@ fn parse_release(json: &str) -> anyhow::Result<Release> {
             .filter(|u| u.starts_with("https://"))
             .map(str::to_owned),
         exe_url: asset(ASSET)?,
+        signature_url: asset(SIGNATURE_ASSET).ok(),
     })
 }
 
@@ -402,6 +419,16 @@ fn split_signed(file: &[u8]) -> Option<(&[u8], &str)> {
     let len: usize = std::str::from_utf8(digits).ok()?.parse().ok()?;
     let (exe, signature) = rest.split_at_checked(rest.len().checked_sub(len)?)?;
     Some((exe, std::str::from_utf8(signature).ok()?))
+}
+
+/// `exe` with `signature` appended, as the release workflow appends it (and
+/// as an update is kept until it's installed).
+fn with_signature(exe: &[u8], signature: &str) -> Vec<u8> {
+    let mut file = exe.to_vec();
+    file.extend(signature.as_bytes());
+    file.extend(format!("{:08}", signature.len()).as_bytes());
+    file.extend(SIGNED_TAG);
+    file
 }
 
 /// Checks that `file` is the release key's signed build of `version`.
@@ -479,9 +506,12 @@ fn staged_in(dir: &Path, key: &str) -> Option<(String, Vec<u8>)> {
 /// version and the path to start.
 fn install_staged() -> anyhow::Result<(String, PathBuf)> {
     allowed().map_err(|why| anyhow!("{why}"))?;
-    let (version, exe) = staged().ok_or_else(|| anyhow!("no update is ready"))?;
+    let (version, file) = staged().ok_or_else(|| anyhow!("no update is ready"))?;
+    // Without the signature, so the exe's own signature for Windows (on a
+    // code-signed release) stays valid. (A staged file always has one.)
+    let (exe, _) = split_signed(&file).ok_or_else(|| anyhow!("no update is ready"))?;
     let path = std::env::current_exe()?;
-    replace(&path, &exe).with_context(|| format!("updating {}", path.display()))?;
+    replace(&path, exe).with_context(|| format!("updating {}", path.display()))?;
     crate::platform::updated_in_place(&path, &version);
     discard_staged();
     tracing::info!("updated to {version}");
@@ -588,11 +618,7 @@ mod tests {
 
     /// `FILE` with its signature appended, as CI does.
     fn signed() -> Vec<u8> {
-        let mut file = FILE.to_vec();
-        file.extend(SIGNATURE.as_bytes());
-        file.extend(format!("{:08}", SIGNATURE.len()).as_bytes());
-        file.extend(SIGNED_TAG);
-        file
+        with_signature(FILE, SIGNATURE)
     }
 
     #[test]
@@ -617,6 +643,8 @@ mod tests {
         let file = include_bytes!("testdata/update.signed.bin");
         verify_signed(TEST_KEY, file, "9.9.9").unwrap();
         assert_eq!(split_signed(file).unwrap().0, FILE);
+        // A code-signed release's exe and signature, kept together.
+        assert_eq!(with_signature(FILE, SIGNATURE), file);
     }
 
     #[test]
@@ -672,7 +700,17 @@ mod tests {
                 version: "0.2.0".into(),
                 notes_url: Some("https://github.com/o/r/releases/tag/v0.2.0".into()),
                 exe_url: "https://x/exe".into(),
+                signature_url: None,
             }
+        );
+        // A code-signed release has its signature beside the exe.
+        let beside = json.replace(
+            "]",
+            r#", {"name": "virtual-audio-mixer.exe.minisig", "browser_download_url": "https://x/sig"}]"#,
+        );
+        assert_eq!(
+            parse_release(&beside).unwrap().signature_url.as_deref(),
+            Some("https://x/sig")
         );
         // A release still building has no files yet.
         let bare = r#"{"tag_name": "v0.2.0", "assets": []}"#;

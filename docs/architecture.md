@@ -91,7 +91,12 @@ next sign-in).
 Releases are signed with minisign in CI (the `MINISIGN_SECRET_KEY` secret),
 and the app has the public key built in (`update::PUBLIC_KEY`). The signature
 is appended to the exe, followed by its length in 8 digits and `VAMSIG01`, so
-a release is one file (Windows ignores what follows the program). A download is
+a release is one file (Windows ignores what follows the program). A release
+code-signed for Windows (Authenticode, through SignPath, once set up) can't
+have anything appended, so its signature is beside it instead, as
+`virtual-audio-mixer.exe.minisig`; the app downloads both and keeps them as
+one file the same way. It installs the exe without the signature, so the
+code signature stays valid. A download is
 only kept if its signature checks out and the signature's trusted comment
 names that version, and it's checked again, from the bytes that get written,
 when it's installed: the data folder it waits in isn't protected the way
