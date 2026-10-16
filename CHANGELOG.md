@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/actuallyatiger/virtual-audio/compare/v0.4.0...v0.4.1) (2026-10-16)
+
+
+### Bug Fixes
+
+* **help:** say how to remove the mixer ([6a5268d](https://github.com/actuallyatiger/virtual-audio/commit/6a5268d64ecb7accecf5ad22d78a1e0190bf9ee5))
+
 ## [0.4.0](https://github.com/actuallyatiger/virtual-audio/compare/v0.3.0...v0.4.0) (2026-10-16)
 
 
