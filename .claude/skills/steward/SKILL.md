@@ -9,8 +9,8 @@ description: How to look after pull requests in Virtual Audio Mixer - CI, review
 
 Run the four checks from `AGENTS.md` (fmt, clippy on Linux and the Windows
 target, tests). CI doesn't run the Windows-target clippy on Linux, but its
-Windows job lints the same code. A push that turns CI red costs a round
-trip.
+Clippy (Windows) job lints the same code, and it runs the tests on Windows
+only. A push that turns CI red costs a round trip.
 
 ## CI
 
@@ -18,12 +18,14 @@ CI (`.github/workflows/ci.yml`) runs in four stages, each after the one
 before: **Lint** (Format; Clippy on Linux and on Windows), **Config schemas**
 (which refuses changes to a released schema), **Test (Windows)**, which also
 measures coverage (a summary on the run's page, and the `coverage-report`
-artifact), then **Build / Windows exe**, whose `virtual-audio-mixer-windows-x64` artifact
-is the `.exe` to try on Windows. A Clippy failure on one OS only is usually
-platform code (`#[cfg(windows)]`, or the demo backend on Linux); a test
-failure, paths or timing. Fix the cause; never skip or weaken a test to get green. Tests that
-depend on timing should wait for a condition with a generous timeout, not
-sleep a fixed time.
+artifact), then **Build / Windows exe**, whose
+`virtual-audio-mixer-windows-x64` artifact is the `.exe` to try on Windows.
+
+A Clippy failure on one OS only is usually platform code (`#[cfg(windows)]`,
+or the demo backend on Linux). A test failure is usually paths or timing.
+Fix the cause; never skip or weaken a test to get green. Tests that depend on
+timing should wait for a condition with a generous timeout, not sleep a fixed
+time.
 
 ## Review comments
 

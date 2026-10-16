@@ -72,9 +72,11 @@ in `VAMSIG01` (without the signature, installed copies won't update to it).
 - **Wrong changelog entry**: edit the release PR's `CHANGELOG.md` before merging
   (release-please keeps manual edits to its PR until the next push to `main`),
   or fix it on the GitHub Release afterwards.
-- **The release stayed a draft**: the build or publish job failed. Re-run
-  the failed jobs in that workflow run (the build checks out the tag), or
-  upload by hand with `gh release upload vx.y.z virtual-audio-mixer.exe --clobber`
+- **The release stayed a draft**: the test, build or publish job failed.
+  Only that workflow run can finish it, so re-run its failed jobs (they
+  check out the tag). If a test fails for real, the tag's code is broken:
+  fix it on `main`, let release-please make the next version, and delete
+  the draft. Or upload by hand with `gh release upload vx.y.z virtual-audio-mixer.exe --clobber`
   and publish with `gh release edit vx.y.z --draft=false --latest`.
 - Never hand-edit `version` in `Cargo.toml` or the manifest outside a release
   PR: release-please owns them.
