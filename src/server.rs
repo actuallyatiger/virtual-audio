@@ -475,6 +475,10 @@ async fn set_settings(State(app): State<App>, Json(body): Json<Settings>) -> Api
         let want_run_key = want && !want_admin;
         if want_run_key || run_key {
             platform::set_autostart(want_run_key)?;
+            // Pages were told when the administrator setting changed, before
+            // the Run entry did: as Administrator off showed Start with
+            // Windows off too until a reload.
+            e.announce();
         }
         let outdated = platform::admin_copy_version().is_none_or(|v| crate::replaces(&v));
         Ok(platform::hand_over_to(

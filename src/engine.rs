@@ -504,6 +504,12 @@ impl Engine {
         *self.changed.borrow()
     }
 
+    /// Tells open pages the state changed outside the config, such as Start
+    /// with Windows' entry in the registry.
+    pub fn announce(&self) {
+        self.changed.send_modify(|v| *v += 1);
+    }
+
     fn bump(&self, inner: &mut Inner) {
         inner.dirty = true;
         self.changed.send_modify(|v| *v += 1);
@@ -3051,6 +3057,16 @@ mod tests {
             "saved"
         );
         engine.shutdown();
+    }
+
+    #[test]
+    fn announcing_tells_pages_without_saving() {
+        let engine = engine("cable");
+        engine.inner.lock().unwrap().dirty = false;
+        let before = engine.version();
+        engine.announce();
+        assert_eq!(engine.version(), before + 1, "pages fetch the state again");
+        assert!(!engine.inner.lock().unwrap().dirty, "nothing to save");
     }
 
     #[test]
