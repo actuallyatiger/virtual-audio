@@ -68,7 +68,8 @@ the UI in a headless browser.
   `config::MIGRATIONS` (doing nothing is fine for a new field with a
   default), and saves the new schema as `docs/config/v<VERSION>.schema.json`
   next to the old ones. `this_config_format_is_saved` fails until all three
-  are done, and says how.
+  are done, and says how; CI refuses a PR that changes or removes a saved
+  schema instead.
 - New config fields go in structs with `#[serde(default)]`, so older
   `config.json` files still load; an enum that may grow falls back to its
   default rather than making the file unreadable. Invalid API input gets a
