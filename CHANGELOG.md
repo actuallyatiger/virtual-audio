@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.4.0](https://github.com/actuallyatiger/virtual-audio/compare/v0.3.0...v0.4.0) (2026-10-16)
+
+
+### Features
+
+* a phone over Bluetooth as a source ([b3f4d16](https://github.com/actuallyatiger/virtual-audio/commit/b3f4d1611f7b40aaef214d70dea6e1f0b086419b)), closes [#31](https://github.com/actuallyatiger/virtual-audio/issues/31)
+* **dsp:** echo cancellation for mics, WebRTC's AEC3 ([55c24f8](https://github.com/actuallyatiger/virtual-audio/commit/55c24f8843436f548874b3feb3f71696cbae0822)), closes [#32](https://github.com/actuallyatiger/virtual-audio/issues/32)
+* hear a mic yourself, separately from sending it to others ([bbfb6a9](https://github.com/actuallyatiger/virtual-audio/commit/bbfb6a9e6bc4820d05e9a13b4b9e351241aabf8b))
+
+
+### Bug Fixes
+
+* **autostart:** make the sign-in task without running schtasks.exe ([6723270](https://github.com/actuallyatiger/virtual-audio/commit/67232702a459d1c0f74beb1c7e07514a360758fb))
+* **autostart:** show Start with Windows still on after as Administrator goes off ([766befa](https://github.com/actuallyatiger/virtual-audio/commit/766befafc5340f9ea47e03ce35ae023368013828))
+* declare the Windows versions the exe supports ([f493d25](https://github.com/actuallyatiger/virtual-audio/commit/f493d25c9c8f36ea58d8aad5c723d4cd55ba8adf))
+
+
+### Reverts
+
+* a phone over Bluetooth as a source ([d6e2ef6](https://github.com/actuallyatiger/virtual-audio/commit/d6e2ef6a7dd675b52cbfef893db68c19d733df53))
+
 ## [0.3.0](https://github.com/actuallyatiger/virtual-audio/compare/v0.2.1...v0.3.0) (2026-10-14)
 
 

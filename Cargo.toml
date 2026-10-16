@@ -1,6 +1,6 @@
 [package]
 name = "virtual-audio-mixer"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 description = "Mix a microphone with per-app audio into a virtual microphone on Windows"
 license = "GPL-3.0-or-later"
