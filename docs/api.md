@@ -36,7 +36,7 @@ don't know.
 | POST | `/api/music/tracks/remove` | `{"track":3,"name":"Song"}` (its index and name in the list): takes it out of the playlist, never off the disk |
 | POST | `/api/music/tracks/restore` | Puts every removed track back |
 | POST | `/api/music/browse` | `{"folders":true}`: shows the Windows file picker; returns `{"paths":[…]}` |
-| PUT | `/api/hotkeys` | `[{"keys":"Ctrl+Shift+M","action":"push_to_talk","target":"…"}]`. Actions: `toggle_mute`, `push_to_talk`, `push_to_mute` (target: `master` or a source id), `play_sound` (target: a sound id), `stop_sounds`, `music_play_pause`, `music_next`, `music_previous`. |
+| PUT | `/api/hotkeys` | `[{"id":"…","keys":"Ctrl+Shift+M","action":"push_to_talk","target":"…"}]`. Actions: `toggle_mute`, `push_to_talk`, `push_to_mute` (target: `master` or a source id), `play_sound` (target: a sound id), `stop_sounds`, `music_play_pause`, `music_next`, `music_previous`. |
 | PUT | `/api/settings` | `{"autostart":true,"autostart_admin":false,"theme":"system","updates":"auto"}` (`theme`: `"system"`, `"light"` or `"dark"`; `updates`: `"auto"` to download what's found, `"notify"` to offer it, `"off"` to check only when asked). Changing `autostart_admin` shows a Windows permission prompt and waits for it. Turning Start with Windows on, from a copy that isn't the installed one, then quits so the installed copy takes over (the WebSocket reconnects to it). |
 | POST | `/api/quit` | Stops the app. |
 | POST | `/api/update/check` | Checks for an update now (and downloads it, with `updates` on `auto`). |
