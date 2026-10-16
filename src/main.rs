@@ -411,6 +411,7 @@ fn apply_first_run_defaults(config: &mut Config, backend: &dyn backend::Backend)
             name: "Microphone".into(),
             kind: SourceKind::Device { device: None },
             channel: Channel::default(),
+            hear: false,
             processing: Default::default(),
         });
     }

@@ -22,7 +22,9 @@ It runs as a small tray app and is controlled from a web page served on
 - **Any input device** as a source, or "default microphone", which follows the
   Windows default live. Sources that would capture the recording end of the
   output cable (a feedback loop) are refused with an error.
-- **Mic processing** for input devices (a mic card's settings ⚙):
+- **Mic settings** for input devices (a mic card's settings ⚙):
+  - *Hear yourself* (off by default) plays the mic to you on your default
+    output, as well as or instead of sending it to others (**Mute**).
   - *Echo cancellation* (WebRTC's AEC3, as in browsers and Discord) is for
     speakers: it removes what plays on the Windows default output from the
     mic, so others don't hear themselves. It adds 9 ms of delay, which the

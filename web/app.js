@@ -507,9 +507,9 @@ function renderStrips() {
       p.gainValue.setAttribute("aria-label", `${ch.name} volume ${formatDb(ch.gain_db)}. Click to type a value`);
     }
     if (ch.kind === "device") {
-      // The cog lights up while any processing is on.
-      const on = [ch.echo_cancellation && "echo cancellation", ch.noise_suppression && "noise suppression", ch.auto_level && "automatic level", ch.noise_gate && `${ch.gate_mode === "auto" ? "automatic" : "manual"} noise gate`].filter(Boolean);
-      const summary = `Mic processing: ${on.length ? on.join(", ") : "off"}`;
+      // The cog lights up while any setting is on.
+      const on = [ch.hear && "hear yourself", ch.echo_cancellation && "echo cancellation", ch.noise_suppression && "noise suppression", ch.auto_level && "automatic level", ch.noise_gate && `${ch.gate_mode === "auto" ? "automatic" : "manual"} noise gate`].filter(Boolean);
+      const summary = `Mic settings: ${on.length ? on.join(", ") : "off"}`;
       p.settings.classList.toggle("on", on.length > 0);
       p.settings.title = summary;
       p.settings.setAttribute("aria-label", `${ch.name} ${summary.toLowerCase()}`);
@@ -704,6 +704,7 @@ function setupChecks() {
     // (Not again when the cable is the default output: that's said above.)
     const cableIsDefault = defOut && out && defOut.id === out.id;
     if (s.echo_status?.state === "error" && !cableIsDefault) add("warn", `${s.name}'s echo cancellation isn't working`, sentence(s.echo_status.message), { help: "help-trouble" });
+    if (s.hear_status?.state === "error") add("warn", `Hear yourself can't play ${s.name}`, sentence(s.hear_status.message), { help: "help-trouble" });
   }
   if (state.hear_status.state === "error") add("warn", "Hear sounds can't play", state.hear_status.message, { help: "help-trouble" });
   if (state.monitor.state === "error") add("warn", "Listen can't play", state.monitor.message, { help: "help-trouble" });
@@ -764,9 +765,9 @@ $("#setup-close").addEventListener("click", () => $("#setup-dialog").close());
 // Pending checks (e.g. listening for the mic) move on with time.
 setInterval(renderSetup, 1000);
 
-// ---------------------------------------------------------------- mic processing
+// ---------------------------------------------------------------- mic settings
 
-let micDialogId = null; // source whose mic processing dialog is open
+let micDialogId = null; // source whose mic settings dialog is open
 
 function micSource() {
   return state && state.sources.find((s) => s.id === micDialogId);
@@ -785,7 +786,19 @@ function renderMicDialog() {
     $("#mic-dialog").close();
     return;
   }
-  $("#mic-title").textContent = `Mic processing: ${src.name}`;
+  $("#mic-title").textContent = `Mic settings: ${src.name}`;
+  $("#mic-hear").checked = src.hear;
+  // Where you hear it (nothing while Listen plays the whole mix).
+  const hear = src.hear_status;
+  const hearError = hear?.state === "error";
+  $("#mic-hear-now").classList.toggle("bad", hearError);
+  $("#mic-hear-now").textContent = !hear
+    ? ""
+    : hear.state === "running"
+      ? `Playing on ${hear.message}.`
+      : hearError
+        ? sentence(hear.message)
+        : "";
   $("#mic-echo").checked = src.echo_cancellation;
   const echo = src.echo_status;
   const echoError = echo?.state === "error";
@@ -823,6 +836,7 @@ function showThreshold(db) {
 }
 
 const patchMic = (body) => attempt(api("PATCH", `/api/channels/${micDialogId}`, body));
+$("#mic-hear").addEventListener("change", (e) => patchMic({ hear: e.target.checked }));
 $("#mic-echo").addEventListener("change", (e) => patchMic({ echo_cancellation: e.target.checked }));
 $("#mic-suppress").addEventListener("change", (e) => patchMic({ noise_suppression: e.target.checked }));
 $("#mic-auto-level").addEventListener("change", (e) => patchMic({ auto_level: e.target.checked }));

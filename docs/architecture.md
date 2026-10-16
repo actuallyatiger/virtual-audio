@@ -36,8 +36,9 @@ executable with `include_str!`, so the release is a single `.exe`.
   thread also runs its processing (`dsp::Processor`).
 - **Render thread**: pulls from every ring through `Mixer::process` under the
   mixer's mutex and writes the mix to the output device.
-- **Monitor threads** (Listen, Hear sounds and music): play taps of the mix,
-  the soundboard or the music on the default output.
+- **Monitor threads** (Listen, Hear sounds and music, Hear yourself): play
+  taps of the mix, the soundboard, the music or the heard mics (teed off their
+  capture threads after processing) on the default output.
 - **Supervisor**: every 500 ms it (re)starts captures, the output and the
   monitors as devices and apps come and go, and applies source delays.
 - **Echo reference** (one per mic with echo cancellation on): captures what

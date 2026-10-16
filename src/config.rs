@@ -193,6 +193,10 @@ pub struct SourceConfig {
     pub kind: SourceKind,
     #[serde(flatten)]
     pub channel: Channel,
+    /// Play it to you on the Windows default output too (mics; off by
+    /// default).
+    #[serde(default)]
+    pub hear: bool,
     /// Only used by device sources.
     #[serde(flatten)]
     pub processing: Processing,
@@ -462,6 +466,7 @@ mod tests {
                 gain_db: -3.0,
                 muted: true,
             },
+            hear: false,
             processing: Processing::default(),
         };
         let json = serde_json::to_value(&s).unwrap();
