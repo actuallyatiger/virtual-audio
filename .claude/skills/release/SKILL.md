@@ -24,23 +24,7 @@ Releases are automated by release-please (`.github/workflows/release.yml`,
    and the README links there.
 
 To cut a release: check the release PR's changelog reads well, and merge it
-(rebase or merge both work).
-
-Afterwards, add a `config.json` saved by the new version to
-`src/testdata/config/<version>.json`, so later versions are tested against
-it (from 1.0, no release may fail to load an earlier one's config, or break
-the API, without a major version):
-
-1. Start its demo build with a config of its own (the `run` skill), e.g. on
-   port 48300.
-2. Run `.claude/skills/release/save-config.sh 48300`. It sets up every
-   feature through the API and quits the mixer; every request should
-   answer 200 or 204.
-3. Copy its `config.json` to `src/testdata/config/<version>.json`, with
-   `port` set back to 47800 and the music item's `path` set to
-   `C:\Users\you\Music`, as in the others. If the new version added a
-   setting, set it up in the script too.
-4. `cargo test` loads every file there. Then check the Release workflow run went green
+(rebase or merge both work). Then check the Release workflow run went green
 and the release has `virtual-audio-mixer.exe` attached. A signed exe ends
 in `VAMSIG01` (without the signature, installed copies won't update to it).
 

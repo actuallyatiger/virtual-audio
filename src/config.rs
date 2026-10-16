@@ -5,9 +5,38 @@ use std::path::PathBuf;
 
 pub const DEFAULT_PORT: u16 = 47800;
 
+/// The version of the config format, saved in `config.json` as `version`.
+/// Any change to the format (a field added, removed, renamed or retyped, an
+/// enum value, a default) raises it by one, with a migration from the one
+/// before in [`MIGRATIONS`] and the new format's schema saved as
+/// `docs/config/v<VERSION>.schema.json`; the tests hold each change to that.
+/// Configs from before versions (0.5.0 and earlier) are version 1.
+pub const VERSION: u32 = 1;
+
+/// `MIGRATIONS[n - 1]` turns a version `n` config into version `n + 1`, on
+/// its JSON, before it's read. One that only adds a field with a default can
+/// change nothing.
+const MIGRATIONS: &[Migration] = &[];
+
+type Migration = fn(&mut serde_json::Map<String, serde_json::Value>);
+
+/// Runs the `migrations` a version `version` config needs, in order.
+fn migrate(
+    config: &mut serde_json::Map<String, serde_json::Value>,
+    version: u32,
+    migrations: &[Migration],
+) {
+    for migration in migrations.iter().skip(version as usize - 1) {
+        migration(config);
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(default)]
 pub struct Config {
+    /// The format's version ([`VERSION`] once read).
+    pub version: u32,
     pub port: u16,
     /// Render endpoint the final mix is written to (e.g. "CABLE Input").
     pub output: Option<DeviceRef>,
@@ -38,6 +67,7 @@ pub struct Config {
 
 /// How updates are looked for (see [`crate::update`]).
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum UpdateMode {
     /// Check, and download what's found (installing still waits for a
@@ -86,6 +116,7 @@ fn theme_or_system<'de, D: Deserializer<'de>>(d: D) -> Result<Theme, D::Error> {
 
 /// The web UI's colours.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Theme {
     /// Follow the system's light or dark setting.
@@ -97,6 +128,7 @@ pub enum Theme {
 
 /// The music playlist and its settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(default)]
 pub struct MusicConfig {
     /// Files and folders, as added.
@@ -129,12 +161,14 @@ impl Default for MusicConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct MusicItem {
     pub id: String,
     pub path: String,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Repeat {
     #[default]
@@ -146,6 +180,7 @@ pub enum Repeat {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            version: VERSION,
             port: DEFAULT_PORT,
             output: None,
             master: Channel::default(),
@@ -164,12 +199,14 @@ impl Default for Config {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct DeviceRef {
     pub id: String,
     pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(default)]
 pub struct Channel {
     pub gain_db: f32,
@@ -186,6 +223,7 @@ impl Default for Channel {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct SourceConfig {
     pub id: String,
     pub name: String,
@@ -204,6 +242,7 @@ pub struct SourceConfig {
 
 /// Microphone clean-up (see [`crate::dsp`]).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(default)]
 pub struct Processing {
     pub noise_suppression: bool,
@@ -231,6 +270,7 @@ pub struct Processing {
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum GateMode {
     /// Opens when it hears your voice, like Discord's automatic sensitivity.
@@ -257,6 +297,7 @@ impl Default for Processing {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct SoundConfig {
     pub id: String,
     pub name: String,
@@ -277,6 +318,7 @@ pub struct SoundConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SourceKind {
     /// A capture endpoint (microphone, line-in, ...). `None` follows the
@@ -293,6 +335,7 @@ pub enum SourceKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct Hotkey {
     pub id: String,
     /// e.g. "Ctrl+Shift+M", "Mouse5", "F13".
@@ -305,6 +348,7 @@ pub struct Hotkey {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum HotkeyAction {
     ToggleMute,
@@ -343,9 +387,28 @@ impl Config {
         }
     }
 
+    /// Reads a config of any version, migrating an older one to this one.
     fn parse(text: &str) -> Result<Self, String> {
         // Notepad and friends may add a UTF-8 byte order mark.
-        serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())
+        let mut value: serde_json::Value =
+            serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())?;
+        let config = value.as_object_mut().ok_or("it isn't a JSON object")?;
+        let version = match config.get("version") {
+            None => 1,
+            Some(v) => v
+                .as_u64()
+                .and_then(|v| u32::try_from(v).ok())
+                .filter(|&v| v >= 1)
+                .ok_or("its version isn't a number from 1")?,
+        };
+        if version > VERSION {
+            // Written by a newer build: what this one knows still reads (see
+            // the fallbacks above), and what it doesn't is dropped on save.
+            tracing::warn!("config version {version} is newer than this build's ({VERSION})");
+        }
+        migrate(config, version, MIGRATIONS);
+        config.insert("version".into(), VERSION.into());
+        serde_json::from_value(value).map_err(|e| e.to_string())
     }
 
     /// Moves an unreadable config aside (to `config.<timestamp>.json.bad`,
@@ -454,68 +517,116 @@ mod tests {
         }
     }
 
-    /// `config.json` as each release saved it, with every feature set up
-    /// (`testdata/config/<version>.json`, from that release's demo build).
-    /// Each must still load, with nothing lost: from 1.0, breaking this is
-    /// for a major version only. The release skill adds each new release's.
-    #[test]
-    fn every_released_versions_config_still_loads() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/testdata/config");
-        let mut versions = Vec::new();
-        for entry in std::fs::read_dir(dir).unwrap() {
-            let path = entry.unwrap().path();
-            let version = path.file_stem().unwrap().to_string_lossy().into_owned();
-            let text = std::fs::read_to_string(&path).unwrap();
-            let config = Config::parse(&text).unwrap_or_else(|e| panic!("{version}: {e}"));
-            // What every version had, as it was set up.
-            let names: Vec<&str> = config.sources.iter().map(|s| s.name.as_str()).collect();
-            assert_eq!(
-                names,
-                [
-                    "Default microphone",
-                    "Second mic",
-                    "Game",
-                    "Soundboard",
-                    "Music"
-                ],
-                "{version}"
-            );
-            let [mic, mic2, app, ..] = &config.sources[..] else {
-                unreachable!()
-            };
-            assert_eq!(mic.kind, SourceKind::Device { device: None }, "{version}");
-            assert_eq!(mic.channel.gain_db, 3.0, "{version}");
-            assert!(mic.processing.noise_suppression && mic.processing.extra_strength);
-            assert_eq!(mic2.processing.gate_mode, GateMode::Manual, "{version}");
-            assert_eq!(mic2.processing.gate_db, -42.0, "{version}");
-            assert!(matches!(&app.kind, SourceKind::App { exe } if !exe.is_empty()));
-            assert!(app.channel.muted, "{version}");
-            assert_eq!(config.master.gain_db, -1.5, "{version}");
-            assert!(config.output.is_some(), "{version}");
-            assert_eq!(config.hotkeys.len(), 3, "{version}");
-            assert_eq!(config.hotkeys[1].target, mic.id, "{version}");
-            let sound = &config.sounds[0];
-            assert_eq!(config.hotkeys[2].target, sound.id, "{version}");
-            assert_eq!(
-                (sound.gain_db, sound.end_ms),
-                (-3.0, Some(1500)),
-                "{version}"
-            );
-            assert!(!config.hear_sounds && config.even_sounds, "{version}");
-            assert_eq!(config.hear_sounds_db, -4.0, "{version}");
-            let music = &config.music;
-            assert_eq!(music.items.len(), 1, "{version}");
-            assert!(music.shuffle && music.duck && music.hear, "{version}");
-            assert_eq!(
-                (music.repeat, music.duck_db),
-                (Repeat::One, -9.0),
-                "{version}"
-            );
-            assert_eq!(config.theme, Theme::Dark, "{version}");
-            versions.push(version);
+    /// This build's config format, as a JSON Schema: every field, its type,
+    /// its enum values and its default. Doc comments aren't part of the
+    /// format, so they're left out.
+    fn schema() -> String {
+        fn without_descriptions(v: &mut serde_json::Value) {
+            match v {
+                serde_json::Value::Object(fields) => {
+                    fields.remove("description");
+                    fields.values_mut().for_each(without_descriptions);
+                }
+                serde_json::Value::Array(items) => items.iter_mut().for_each(without_descriptions),
+                _ => {}
+            }
         }
-        versions.sort();
-        assert_eq!(versions[..5], ["0.1.0", "0.2.0", "0.2.1", "0.3.0", "0.4.0"]);
+        let mut schema = serde_json::to_value(schemars::schema_for!(Config)).unwrap();
+        without_descriptions(&mut schema);
+        serde_json::to_string_pretty(&schema).unwrap() + "\n"
+    }
+
+    fn saved_schema(version: u32) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("docs/config/v{version}.schema.json"))
+    }
+
+    /// The format must be the one saved for [`VERSION`]: changing it means a
+    /// new version, with a migration, so configs saved before still load.
+    #[test]
+    fn this_config_format_is_saved() {
+        let now = schema();
+        let new = std::env::temp_dir().join("virtual-audio-mixer.schema.json");
+        let Ok(saved) = std::fs::read_to_string(saved_schema(VERSION)) else {
+            std::fs::write(&new, &now).unwrap();
+            panic!(
+                "Save {} as docs/config/v{VERSION}.schema.json.",
+                new.display()
+            );
+        };
+        if saved.replace("\r\n", "\n") == now {
+            return;
+        }
+        std::fs::write(&new, &now).unwrap();
+        let next = VERSION + 1;
+        panic!(
+            "The config format changed. Raise config::VERSION to {next}, add a migration from \
+             version {VERSION} to config::MIGRATIONS (one that changes nothing is fine for a new \
+             field with a default), and save {} as docs/config/v{next}.schema.json. Keep \
+             v{VERSION}.schema.json.",
+            new.display()
+        );
+    }
+
+    #[test]
+    fn every_version_has_its_schema_and_migration() {
+        assert_eq!(
+            MIGRATIONS.len(),
+            VERSION as usize - 1,
+            "one per version after 1"
+        );
+        for version in 1..=VERSION {
+            assert!(saved_schema(version).exists(), "v{version}.schema.json");
+        }
+        assert!(
+            !saved_schema(VERSION + 1).exists(),
+            "a schema without its version"
+        );
+    }
+
+    #[test]
+    fn a_config_saved_before_versions_is_version_1() {
+        // 0.5.0 and earlier saved no version.
+        let old = Config::parse(r#"{"port":1,"theme":"dark"}"#).unwrap();
+        assert_eq!(
+            (old.version, old.port, old.theme),
+            (VERSION, 1, Theme::Dark)
+        );
+        let saved = serde_json::to_value(&old).unwrap();
+        assert_eq!(saved["version"], VERSION, "saved with this version");
+    }
+
+    #[test]
+    fn migrations_run_from_the_configs_version_in_order() {
+        let to_2: Migration = |c| {
+            c.insert("steps".into(), "2".into());
+        };
+        let to_3: Migration = |c| {
+            let steps = c
+                .get("steps")
+                .and_then(|s| s.as_str())
+                .unwrap_or("-")
+                .to_owned();
+            c.insert("steps".into(), (steps + "3").into());
+        };
+        let run = |version| {
+            let mut config = serde_json::Map::new();
+            migrate(&mut config, version, &[to_2, to_3]);
+            config.get("steps").cloned()
+        };
+        assert_eq!(run(1), Some("23".into()));
+        assert_eq!(run(2), Some("-3".into()));
+        assert_eq!(run(3), None, "already the newest");
+        assert_eq!(run(9), None, "newer than this build");
+    }
+
+    #[test]
+    fn a_newer_config_still_reads() {
+        let newer = Config::parse(r#"{"version":999,"port":2,"hologram":true}"#).unwrap();
+        assert_eq!((newer.version, newer.port), (VERSION, 2));
+        for bad in [r#"{"version":"two"}"#, r#"{"version":0}"#, r#"[1]"#] {
+            assert!(Config::parse(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

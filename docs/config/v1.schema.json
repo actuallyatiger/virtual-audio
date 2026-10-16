@@ -1,0 +1,465 @@
+{
+  "$defs": {
+    "Channel": {
+      "properties": {
+        "gain_db": {
+          "default": 0.0,
+          "format": "float",
+          "type": "number"
+        },
+        "muted": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "DeviceRef": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "type": "object"
+    },
+    "GateMode": {
+      "oneOf": [
+        {
+          "const": "auto",
+          "type": "string"
+        },
+        {
+          "const": "manual",
+          "type": "string"
+        }
+      ]
+    },
+    "Hotkey": {
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/HotkeyAction"
+        },
+        "id": {
+          "type": "string"
+        },
+        "keys": {
+          "type": "string"
+        },
+        "target": {
+          "default": "",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "keys",
+        "action"
+      ],
+      "type": "object"
+    },
+    "HotkeyAction": {
+      "oneOf": [
+        {
+          "enum": [
+            "toggle_mute",
+            "play_sound",
+            "stop_sounds",
+            "music_play_pause",
+            "music_next",
+            "music_previous"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "push_to_talk",
+          "type": "string"
+        },
+        {
+          "const": "push_to_mute",
+          "type": "string"
+        }
+      ]
+    },
+    "MusicConfig": {
+      "properties": {
+        "duck": {
+          "default": false,
+          "type": "boolean"
+        },
+        "duck_db": {
+          "default": -12.0,
+          "format": "float",
+          "type": "number"
+        },
+        "hear": {
+          "default": true,
+          "type": "boolean"
+        },
+        "hear_db": {
+          "default": 0.0,
+          "format": "float",
+          "type": "number"
+        },
+        "items": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/MusicItem"
+          },
+          "type": "array"
+        },
+        "removed": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "repeat": {
+          "$ref": "#/$defs/Repeat",
+          "default": "all"
+        },
+        "shuffle": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "MusicItem": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "path"
+      ],
+      "type": "object"
+    },
+    "Repeat": {
+      "enum": [
+        "off",
+        "all",
+        "one"
+      ],
+      "type": "string"
+    },
+    "SoundConfig": {
+      "properties": {
+        "end_ms": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "fade_in_ms": {
+          "default": 0,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fade_out_ms": {
+          "default": 0,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "file": {
+          "type": "string"
+        },
+        "gain_db": {
+          "default": 0.0,
+          "format": "float",
+          "type": "number"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "start_ms": {
+          "default": 0,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "file"
+      ],
+      "type": "object"
+    },
+    "SourceConfig": {
+      "oneOf": [
+        {
+          "properties": {
+            "device": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DeviceRef"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "const": "device",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "exe": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "app",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "exe"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "soundboard",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "music",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "auto_level": {
+          "default": false,
+          "type": "boolean"
+        },
+        "auto_level_db": {
+          "default": 0.0,
+          "format": "float",
+          "type": "number"
+        },
+        "echo_cancellation": {
+          "default": false,
+          "type": "boolean"
+        },
+        "extra_strength": {
+          "default": false,
+          "type": "boolean"
+        },
+        "gain_db": {
+          "default": 0.0,
+          "format": "float",
+          "type": "number"
+        },
+        "gate_db": {
+          "default": -45.0,
+          "format": "float",
+          "type": "number"
+        },
+        "gate_mode": {
+          "$ref": "#/$defs/GateMode",
+          "default": "auto"
+        },
+        "hear": {
+          "default": false,
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "keep_in_time": {
+          "default": false,
+          "type": "boolean"
+        },
+        "muted": {
+          "default": false,
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "noise_gate": {
+          "default": false,
+          "type": "boolean"
+        },
+        "noise_suppression": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "type": "object"
+    },
+    "Theme": {
+      "oneOf": [
+        {
+          "enum": [
+            "light",
+            "dark"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "system",
+          "type": "string"
+        }
+      ]
+    },
+    "UpdateMode": {
+      "oneOf": [
+        {
+          "const": "auto",
+          "type": "string"
+        },
+        {
+          "const": "notify",
+          "type": "string"
+        },
+        {
+          "const": "off",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "autostart_admin": {
+      "default": false,
+      "type": "boolean"
+    },
+    "even_sounds": {
+      "default": true,
+      "type": "boolean"
+    },
+    "hear_sounds": {
+      "default": true,
+      "type": "boolean"
+    },
+    "hear_sounds_db": {
+      "default": 0.0,
+      "format": "float",
+      "type": "number"
+    },
+    "hotkeys": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Hotkey"
+      },
+      "type": "array"
+    },
+    "master": {
+      "$ref": "#/$defs/Channel",
+      "default": {
+        "gain_db": 0.0,
+        "muted": false
+      }
+    },
+    "music": {
+      "$ref": "#/$defs/MusicConfig",
+      "default": {
+        "duck": false,
+        "duck_db": -12.0,
+        "hear": true,
+        "hear_db": 0.0,
+        "items": [],
+        "removed": [],
+        "repeat": "all",
+        "shuffle": false
+      }
+    },
+    "output": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DeviceRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "port": {
+      "default": 47800,
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "sounds": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/SoundConfig"
+      },
+      "type": "array"
+    },
+    "sources": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/SourceConfig"
+      },
+      "type": "array"
+    },
+    "theme": {
+      "$ref": "#/$defs/Theme",
+      "default": "system"
+    },
+    "updates": {
+      "$ref": "#/$defs/UpdateMode",
+      "default": "auto"
+    },
+    "version": {
+      "default": 1,
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "title": "Config",
+  "type": "object"
+}
