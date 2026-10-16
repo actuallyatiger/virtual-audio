@@ -1,8 +1,8 @@
 name: CI
 
 # Four stages, each waiting for the one before: lint, the saved config
-# schemas, the tests, then the Windows build. A failure says which kind it
-# is, and nothing is built from code that doesn't pass.
+# schemas, the tests (with coverage), then the Windows build. A failure
+# says which kind it is, and nothing is built from code that doesn't pass.
 
 on:
   push:
@@ -94,27 +94,50 @@ jobs:
 
   # ---------------------------------------------------------------- test
 
+  # Windows only: the app is a Windows app, and the code shared with the
+  # Linux demo build runs here too (Clippy (Linux) keeps that compiling).
   test:
-    name: Test (${{ matrix.name }})
+    name: Test (Windows)
     needs: config-schemas
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Linux
-            os: ubuntu-latest
-          - name: Windows
-            os: windows-latest
+    runs-on: windows-latest
     steps:
       - name: Check out
         uses: actions/checkout@v4
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
       - name: Cache
         uses: Swatinem/rust-cache@v2
-      - name: Run tests
-        run: cargo test
+      - name: Run tests, measuring coverage
+        run: cargo llvm-cov --no-report
+      # Per file, on the run's summary page; the full report is an artifact.
+      # Code that needs real audio devices or Windows prompts can't run
+      # here, so it shows as untested.
+      - name: Report coverage
+        shell: bash
+        run: |
+          {
+            echo "## Test coverage"
+            echo
+            echo '```'
+            cargo llvm-cov report --summary-only
+            echo '```'
+            echo
+            echo "Line by line: the coverage-report artifact (html/index.html)."
+          } >> "$GITHUB_STEP_SUMMARY"
+          cargo llvm-cov report --html --output-dir coverage
+          cargo llvm-cov report --lcov --output-path coverage/lcov.info
+      - name: Upload the coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage
+          if-no-files-found: error
 
   # ---------------------------------------------------------------- build
 
