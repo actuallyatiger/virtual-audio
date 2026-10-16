@@ -131,11 +131,10 @@ fn xml_escape(s: &str) -> String {
 #[cfg(windows)]
 mod imp {
     use anyhow::{Context, bail};
-    use std::os::windows::process::CommandExt;
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
     use windows::Win32::Foundation::{
-        CloseHandle, ERROR_CANCELLED, ERROR_SUCCESS, HANDLE, WAIT_OBJECT_0,
+        CloseHandle, ERROR_CANCELLED, ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, HANDLE, WAIT_OBJECT_0,
     };
     use windows::Win32::Security::{
         GetTokenInformation, LookupAccountSidW, SID_NAME_USE, TOKEN_ELEVATION, TOKEN_QUERY,
@@ -143,29 +142,31 @@ mod imp {
     };
     use windows::Win32::Storage::FileSystem::{MOVEFILE_DELAY_UNTIL_REBOOT, MoveFileExW};
     use windows::Win32::System::Com::{
-        COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoTaskMemFree,
-        CoUninitialize,
+        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
+        COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize,
     };
     use windows::Win32::System::Registry::{
         HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ, RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW,
     };
+    use windows::Win32::System::TaskScheduler::{
+        ITaskFolder, ITaskService, TASK_CREATE_OR_UPDATE, TASK_LOGON_INTERACTIVE_TOKEN,
+        TaskScheduler,
+    };
     use windows::Win32::System::Threading::{
         GetCurrentProcess, GetExitCodeProcess, OpenProcessToken, WaitForSingleObject,
     };
+    use windows::Win32::System::Variant::VARIANT;
     use windows::Win32::UI::Shell::{
-        FOLDERID_ProgramFiles, FOLDERID_System, FOLDERID_UserProgramFiles, FOLDERID_Windows,
-        KF_FLAG_DEFAULT, KF_FLAG_DONT_VERIFY, KNOWN_FOLDER_FLAG, SEE_MASK_NO_CONSOLE,
-        SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, SHGetKnownFolderPath,
-        ShellExecuteExW, ShellExecuteW,
+        FOLDERID_ProgramFiles, FOLDERID_UserProgramFiles, FOLDERID_Windows, KF_FLAG_DEFAULT,
+        KF_FLAG_DONT_VERIFY, KNOWN_FOLDER_FLAG, SEE_MASK_NO_CONSOLE, SEE_MASK_NOASYNC,
+        SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, SHGetKnownFolderPath, ShellExecuteExW,
+        ShellExecuteW,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         IDYES, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_SETFOREGROUND, MB_YESNO, MessageBoxW,
         SW_HIDE, SW_SHOWNORMAL,
     };
-    use windows::core::{GUID, HSTRING, PCWSTR, PWSTR, w};
-
-    /// Hides the console window schtasks.exe would otherwise flash.
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    use windows::core::{BSTR, GUID, HSTRING, PCWSTR, PWSTR, w};
 
     const RUN_KEY: PCWSTR = w!(r"Software\Microsoft\Windows\CurrentVersion\Run");
     const VALUE: PCWSTR = w!("VirtualAudioMixer");
@@ -247,12 +248,13 @@ mod imp {
     /// Starts the installed copy, in the background.
     pub fn start_installed(copy: super::Installed) -> anyhow::Result<()> {
         if copy == super::Installed::Admin {
-            let name = std::ffi::OsStr::new(super::TASK_NAME);
-            let out = schtasks(&["/Run".as_ref(), "/TN".as_ref(), name])?;
-            if !out.status.success() {
-                return Err(failure(&out));
-            }
-            return Ok(());
+            return with_tasks(|tasks| unsafe {
+                tasks
+                    .GetTask(&BSTR::from(super::TASK_NAME))?
+                    .Run(&VARIANT::default())?;
+                Ok(())
+            })
+            .context("starting the sign-in task");
         }
         // A file the user can change never runs as administrator.
         anyhow::ensure!(!is_elevated(), "running as administrator");
@@ -587,7 +589,7 @@ mod imp {
                     }
                     return Err(e).context("asking for administrator permission");
                 }
-                // The helper only copies a file and runs schtasks.
+                // The helper only copies a file and registers the task.
                 let waited = WaitForSingleObject(info.hProcess, 120_000);
                 let mut code = 1;
                 let _ = GetExitCodeProcess(info.hProcess, &mut code);
@@ -643,18 +645,33 @@ mod imp {
         result
     }
 
-    fn schtasks(args: &[&std::ffi::OsStr]) -> anyhow::Result<std::process::Output> {
-        let exe = known_folder(&FOLDERID_System)?.join("schtasks.exe");
-        std::process::Command::new(exe)
-            .args(args)
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-            .context("running schtasks.exe")
-    }
-
-    /// schtasks' error message.
-    fn failure(out: &std::process::Output) -> anyhow::Error {
-        anyhow::anyhow!("{}", String::from_utf8_lossy(&out.stderr).trim())
+    /// Runs `f` on Task Scheduler's root folder, through its COM interface
+    /// rather than schtasks.exe: an unsigned exe starting a command-line
+    /// tool to make a task that runs as administrator is what malware does,
+    /// and Defender's behaviour detection removed the mixer for it. On a
+    /// thread of its own, which has the COM apartment it needs.
+    fn with_tasks<T: Send>(
+        f: impl FnOnce(&ITaskFolder) -> anyhow::Result<T> + Send,
+    ) -> anyhow::Result<T> {
+        std::thread::scope(|scope| {
+            scope
+                .spawn(|| unsafe {
+                    let com = CoInitializeEx(None, COINIT_MULTITHREADED);
+                    let result = (|| {
+                        let service: ITaskService =
+                            CoCreateInstance(&TaskScheduler, None, CLSCTX_INPROC_SERVER)?;
+                        let none = VARIANT::default();
+                        service.Connect(&none, &none, &none, &none)?;
+                        f(&service.GetFolder(&BSTR::from("\\"))?)
+                    })();
+                    if com.is_ok() {
+                        CoUninitialize();
+                    }
+                    result
+                })
+                .join()
+                .map_err(|_| anyhow::anyhow!("Task Scheduler failed"))?
+        })
     }
 
     /// The installed copy's name, and where a running one is moved aside.
@@ -767,18 +784,18 @@ mod imp {
     /// Creates or deletes the task and the installed copy it starts. Needs
     /// to run elevated.
     fn admin_task(enabled: bool, user: &str) -> anyhow::Result<()> {
-        let name = std::ffi::OsStr::new(super::TASK_NAME);
+        // (BSTRs are made on Task Scheduler's thread: they can't be shared.)
+        let name = super::TASK_NAME;
         let dir = install_dir()?;
         if !enabled {
-            let out = schtasks(&["/Delete".as_ref(), "/TN".as_ref(), name, "/F".as_ref()])?;
-            // Failing is fine only if there was no task to delete.
-            if !out.status.success()
-                && schtasks(&["/Query".as_ref(), "/TN".as_ref(), name])?
-                    .status
-                    .success()
-            {
-                return Err(failure(&out));
-            }
+            with_tasks(
+                |tasks| match unsafe { tasks.DeleteTask(&BSTR::from(name), 0) } {
+                    // Failing is fine only if there was no task to delete.
+                    Err(e) if e.code() != ERROR_FILE_NOT_FOUND.to_hresult() => Err(e.into()),
+                    _ => Ok(()),
+                },
+            )
+            .context("removing the sign-in task")?;
             for file in [EXE, OLD_EXE, VERSION_FILE].into_iter().chain(LEGACY) {
                 remove(&dir.join(file));
             }
@@ -787,26 +804,21 @@ mod imp {
         std::fs::create_dir_all(&dir).context("creating the Program Files folder")?;
         let exe = install(&dir)?;
         let xml = super::admin_task_xml(&exe.display().to_string(), user);
-        // schtasks wants the definition as UTF-16 with a byte order mark. It
-        // goes in the install folder, which only administrators can change.
-        let mut bytes = vec![0xFF, 0xFE];
-        bytes.extend(xml.encode_utf16().flat_map(u16::to_le_bytes));
-        let path = dir.join("task.xml");
-        std::fs::write(&path, bytes).context("writing the task definition")?;
-        let out = schtasks(&[
-            "/Create".as_ref(),
-            "/TN".as_ref(),
-            name,
-            "/XML".as_ref(),
-            path.as_os_str(),
-            "/F".as_ref(),
-        ]);
-        let _ = std::fs::remove_file(&path);
-        let out = out?;
-        if !out.status.success() {
-            return Err(failure(&out));
-        }
-        Ok(())
+        // The user and logon type are the definition's own.
+        with_tasks(|tasks| unsafe {
+            let none = VARIANT::default();
+            tasks.RegisterTask(
+                &BSTR::from(name),
+                &BSTR::from(xml.as_str()),
+                TASK_CREATE_OR_UPDATE.0,
+                &none,
+                &none,
+                TASK_LOGON_INTERACTIVE_TOKEN,
+                &none,
+            )?;
+            Ok(())
+        })
+        .context("registering the sign-in task")
     }
 }
 
