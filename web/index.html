@@ -403,6 +403,7 @@
         <a href="#help-hotkeys">Hotkeys</a>
         <a href="#help-trouble">Troubleshooting</a>
         <a href="#help-updates">Updates</a>
+        <a href="#help-remove">Removing it</a>
       </nav>
       <div class="help-body">
         <section id="help-start">
@@ -596,6 +597,22 @@
             <li><b>Safe:</b> only genuine, signed releases are installed. A check only asks GitHub for the latest version number.</li>
             <li>The copy that starts as administrator updates itself too.</li>
           </ul>
+        </section>
+
+        <section id="help-remove">
+          <h3>Removing it</h3>
+          <ol>
+            <li><b>Turn off Start with Windows</b> in Settings. This removes what starts it when you sign in, and the copies it installed.</li>
+            <li><b>Quit</b> from the tray icon.</li>
+            <li><b>Delete the exe</b> you downloaded, and these folders if they're still there:
+              <ul>
+                <li><code>%APPDATA%\VirtualAudioMixer</code>: your settings, sounds and logs.</li>
+                <li><code>%LOCALAPPDATA%\Programs\Virtual Audio Mixer</code></li>
+                <li><code>C:\Program Files\Virtual Audio Mixer</code> (it goes by itself when you restart)</li>
+              </ul>
+            </li>
+            <li><b>VB-Audio Virtual Cable</b>, if you want it gone too: run its setup again, choose <b>Remove Driver</b>, and restart.</li>
+          </ol>
         </section>
         <p class="hint small"><span id="help-version">Virtual Audio Mixer</span> · <a href="https://github.com/actuallyatiger/virtual-audio/releases" target="_blank" rel="noreferrer">Releases and what's new</a></p>
       </div>

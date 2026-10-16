@@ -456,4 +456,4 @@ dialog.wide { width: min(760px, calc(100vw - 32px)); }
 .help-body ul, .help-body ol { padding-left: 20px; }
 .help-body li + li { margin-top: 4px; }
 .help-body a { color: var(--accent); }
-.help-body code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; }
+.help-body code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }

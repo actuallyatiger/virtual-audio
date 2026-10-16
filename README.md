@@ -188,6 +188,21 @@ Output; Listen picks up the change by itself.
 Logs go to these files only in Windows release builds. Debug builds and demo
 mode print them to the terminal instead.
 
+## Removing it
+
+1. In the mixer's **Settings**, turn off **Start with Windows**. This
+   removes the sign-in entry (or the administrator task, after Windows asks
+   for permission) and the copies it installed.
+2. Quit from the tray icon.
+3. Delete the exe you downloaded, and these folders if they're still there:
+   - `%APPDATA%\VirtualAudioMixer`: your settings, sounds and logs.
+   - `%LOCALAPPDATA%\Programs\Virtual Audio Mixer`: the copy Start with
+     Windows ran, if it was the one running.
+   - `C:\Program Files\Virtual Audio Mixer`: the administrator copy (it
+     goes by itself at the next restart).
+4. To remove VB-Audio Virtual Cable too, run its setup again and choose
+   **Remove Driver**, then restart.
+
 ## Building and contributing
 
 ```sh
