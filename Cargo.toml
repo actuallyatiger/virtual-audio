@@ -41,3 +41,6 @@ opt-level = 3
 
 [profile.dev.package.sonora]
 opt-level = 3
+
+[build-dependencies]
+embed-manifest = "1.5.1"
