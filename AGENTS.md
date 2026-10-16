@@ -58,11 +58,17 @@ the UI in a headless browser.
 - Avoid clicks: every start, stop and jump ramps the gain (a few ms) instead
   of cutting mid-waveform.
 - **No breaking changes without a major version** (from 1.0): every
-  `config.json` an earlier version saved must load (`src/testdata/config/`
-  has one from each release, and the test loading them must keep passing),
-  and the API ([docs/api.md](docs/api.md)) only grows. A change that can't
-  avoid breaking either is a `feat!` with a `BREAKING CHANGE:` footer.
-  When releasing, add the new version's config there (the `release` skill).
+  `config.json` an earlier version saved must load, and the API
+  ([docs/api.md](docs/api.md)) only grows. A change that can't avoid
+  breaking either is a `feat!` with a `BREAKING CHANGE:` footer.
+- **The config format is versioned**, like a database's migrations
+  (`config::VERSION`, [docs/config](docs/config)). Any change to it (a
+  field added, removed, renamed or retyped, an enum value, a default)
+  raises `VERSION`, adds a migration from the version before to
+  `config::MIGRATIONS` (doing nothing is fine for a new field with a
+  default), and saves the new schema as `docs/config/v<VERSION>.schema.json`
+  next to the old ones. `this_config_format_is_saved` fails until all three
+  are done, and says how.
 - New config fields go in structs with `#[serde(default)]`, so older
   `config.json` files still load; an enum that may grow falls back to its
   default rather than making the file unreadable. Invalid API input gets a
