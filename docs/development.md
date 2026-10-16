@@ -68,7 +68,7 @@ test build: its version reads like `0.2.1-dev.010e2aa` (the commit, from
 → **Install the latest release** swaps it for the latest release by hand.
 
 To try a PR on Windows, download `virtual-audio-mixer-windows-x64` from the
-**Windows release build** job's artifacts (Checks tab, needs a GitHub login)
+**Build / Windows exe** job's artifacts (Checks tab, needs a GitHub login)
 and open it:
 
 - If the mixer is running as another build, it asks to replace it.

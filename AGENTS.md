@@ -36,9 +36,10 @@ cargo clippy --all-targets --target x86_64-pc-windows-gnu -- -D warnings  # the 
 cargo test
 ```
 
-All four must pass before pushing. CI runs fmt, clippy and the tests on
-Windows and Linux (Windows' own clippy covers the Windows-only code there) and
-builds the release `.exe`. On Linux, `cargo run` starts the demo backend (fake
+All four must pass before pushing. CI runs them in stages: **Lint** (format,
+and clippy on Linux and on Windows, which covers the Windows-only code), then
+**Config schemas** (no released schema changed), **Test** (Linux and Windows),
+then **Build** (the release `.exe`). On Linux, `cargo run` starts the demo backend (fake
 devices and apps that play tones) with the real engine and UI: see the `run`
 skill (`.claude/skills/run/SKILL.md`) for running it in isolation and driving
 the UI in a headless browser.

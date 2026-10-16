@@ -14,10 +14,12 @@ trip.
 
 ## CI
 
-CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on `windows-latest`
-and `ubuntu-latest`, then a Windows release build whose
-`virtual-audio-mixer-windows-x64` artifact is the `.exe` to try on Windows. A failure
-on one OS only is usually platform code (`#[cfg(windows)]`, paths, timing in
+CI (`.github/workflows/ci.yml`) runs in four stages, each after the one
+before: **Lint** (Format; Clippy on Linux and on Windows), **Config schemas**
+(which refuses changes to a released schema), **Test** (on Linux and on
+Windows), then **Build / Windows exe**, whose `virtual-audio-mixer-windows-x64` artifact
+is the `.exe` to try on Windows. A failure on one OS only is usually platform
+code (`#[cfg(windows)]`, paths, timing in
 tests). Fix the cause; never skip or weaken a test to get green. Tests that
 depend on timing should wait for a condition with a generous timeout, not
 sleep a fixed time.
