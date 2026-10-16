@@ -60,6 +60,9 @@ pub struct UpdateView {
     pub notes_url: Option<String>,
     /// What went wrong, last time (also while an update is still ready).
     pub message: String,
+    /// A test build that can be swapped for the latest release, by hand
+    /// ([`Updater::install_latest_release`]).
+    pub can_install_release: bool,
 }
 
 impl UpdateView {
@@ -69,6 +72,7 @@ impl UpdateView {
             version: None,
             notes_url: None,
             message: String::new(),
+            can_install_release: false,
         }
     }
 }
@@ -94,6 +98,7 @@ impl Updater {
             Ok(()) => UpdateView::new("idle"),
             Err(why) => UpdateView {
                 message: why.into(),
+                can_install_release: !crate::RELEASE && can_replace().is_ok(),
                 ..UpdateView::new("unsupported")
             },
         };
@@ -208,6 +213,30 @@ impl Updater {
         result
     }
 
+    /// A test build, which never updates itself: replaces this copy with the
+    /// latest release, whatever its version, when asked to by hand, and
+    /// starts it. Checked like any update. The caller then quits.
+    pub fn install_latest_release(&self) -> anyhow::Result<()> {
+        let Ok(_one) = self.installing.try_lock() else {
+            bail!("it's already being installed");
+        };
+        if crate::RELEASE {
+            bail!("this isn't a test build: use Check now");
+        }
+        can_replace().map_err(|why| anyhow!("{why}"))?;
+        let agent = agent();
+        let release = latest(&agent)?;
+        let failed = || format!("couldn't download version {}", release.version);
+        let file = fetch(&agent, &release.exe_url).with_context(failed)?;
+        verify_signed(PUBLIC_KEY, &file, &release.version).with_context(failed)?;
+        let path = std::env::current_exe()?;
+        replace(&path, &file).with_context(|| format!("updating {}", path.display()))?;
+        crate::platform::updated_in_place(&path, &release.version);
+        tracing::info!("replaced this test build with version {}", release.version);
+        launch(&path, true)
+            .with_context(|| format!("version {} is installed, but didn't start", release.version))
+    }
+
     fn send(&self, wake: Wake) {
         if let Some(tx) = self.wake.lock().unwrap().as_ref() {
             let _ = tx.send(wake);
@@ -251,13 +280,7 @@ impl Updater {
     /// `found` is set to the newer version once there is one, for the error.
     fn try_check(&self, download: bool, found: &mut Option<String>) -> anyhow::Result<UpdateView> {
         let agent = agent();
-        let json = agent
-            .get(LATEST)
-            .header("Accept", "application/vnd.github+json")
-            .call()
-            .and_then(|mut r| r.body_mut().read_to_string())
-            .context("couldn't check for updates")?;
-        let release = parse_release(&json).context("couldn't check for updates")?;
+        let release = latest(&agent)?;
         if !crate::is_older(VERSION, &release.version) {
             discard_staged();
             return Ok(UpdateView::new("up_to_date"));
@@ -282,17 +305,8 @@ impl Updater {
         if staged.is_none() {
             self.set(view("downloading"));
         }
-        let fetch = |url: &str| -> anyhow::Result<Vec<u8>> {
-            Ok(agent
-                .get(url)
-                .call()?
-                .body_mut()
-                .with_config()
-                .limit(MAX_DOWNLOAD)
-                .read_to_vec()?)
-        };
         let failed = || format!("couldn't download version {}", release.version);
-        let file = fetch(&release.exe_url).with_context(failed)?;
+        let file = fetch(&agent, &release.exe_url).with_context(failed)?;
         verify_signed(PUBLIC_KEY, &file, &release.version).with_context(failed)?;
         stage(&file).with_context(failed)?;
         tracing::info!("update {} downloaded and verified", release.version);
@@ -319,6 +333,14 @@ fn allowed() -> Result<(), &'static str> {
     if !crate::RELEASE {
         return Err("This is a test build, so it doesn't update itself.");
     }
+    can_replace()
+}
+
+/// Why this copy can't replace its own exe, if it can't (see [`allowed`]).
+fn can_replace() -> Result<(), &'static str> {
+    if !cfg!(windows) {
+        return Err("Updates are for the Windows app.");
+    }
     let exe = std::env::current_exe().map_err(|_| "Can't tell where the mixer is.")?;
     if crate::platform::is_elevated() && !crate::platform::is_admin_copy(&exe) {
         return Err(
@@ -328,6 +350,27 @@ fn allowed() -> Result<(), &'static str> {
         );
     }
     Ok(())
+}
+
+/// The latest release, from GitHub.
+fn latest(agent: &ureq::Agent) -> anyhow::Result<Release> {
+    let json = agent
+        .get(LATEST)
+        .header("Accept", "application/vnd.github+json")
+        .call()
+        .and_then(|mut r| r.body_mut().read_to_string())
+        .context("couldn't check for updates")?;
+    parse_release(&json).context("couldn't check for updates")
+}
+
+fn fetch(agent: &ureq::Agent, url: &str) -> anyhow::Result<Vec<u8>> {
+    Ok(agent
+        .get(url)
+        .call()?
+        .body_mut()
+        .with_config()
+        .limit(MAX_DOWNLOAD)
+        .read_to_vec()?)
 }
 
 fn agent() -> ureq::Agent {

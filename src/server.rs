@@ -95,6 +95,7 @@ pub fn router(engine: Arc<Engine>, port: u16, quit: Arc<dyn Fn() + Send + Sync>)
         .route("/api/update/check", post(check_for_update))
         .route("/api/update/download", post(download_update))
         .route("/api/update/install", post(install_update))
+        .route("/api/update/install-release", post(install_release))
         .route("/ws", get(ws))
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app)
@@ -520,6 +521,14 @@ async fn download_update(State(app): State<App>) -> ApiResult {
 async fn install_update(State(app): State<App>) -> ApiResult {
     blocking(&app, StatusCode::INTERNAL_SERVER_ERROR, |e| {
         e.updater.install_and_launch()
+    })
+    .await?;
+    quit_app(State(app)).await
+}
+
+async fn install_release(State(app): State<App>) -> ApiResult {
+    blocking(&app, StatusCode::INTERNAL_SERVER_ERROR, |e| {
+        e.updater.install_latest_release()
     })
     .await?;
     quit_app(State(app)).await
