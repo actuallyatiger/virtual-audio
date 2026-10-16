@@ -2000,6 +2000,8 @@ function renderUpdate() {
   if (restarting && u.state !== "ready") restarting = null;
   $("#update-status").textContent = (UPDATE_STATUS[u.state] || UPDATE_STATUS.idle)(u);
   $("#update-check").hidden = u.state === "unsupported";
+  // A test build doesn't update itself, but can be swapped for a release.
+  $("#update-release").hidden = !u.can_install_release;
   $("#update-check").disabled = u.state === "checking" || u.state === "downloading";
   $("#update-mode").hidden = u.state === "unsupported";
   // Two boxes over one setting: off, notify (check only) or auto.
@@ -2052,6 +2054,21 @@ $("#update-btn").addEventListener("click", () => {
     });
 });
 $("#update-check").addEventListener("click", () => attempt(api("POST", "/api/update/check")));
+$("#update-release").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  if (btn.getAttribute("aria-disabled") === "true") return;
+  if (!confirm("Replace this test build with the latest release? The mixer restarts.")) return;
+  // Stays focusable while busy; the page reloads when the release answers.
+  btn.setAttribute("aria-disabled", "true");
+  btn.textContent = "Installing…";
+  try {
+    await api("POST", "/api/update/install-release");
+  } catch (err) {
+    toast(err.message);
+    btn.setAttribute("aria-disabled", "false");
+    btn.textContent = "Install the latest release";
+  }
+});
 function saveUpdateMode() {
   const updates = !$("#update-auto-check").checked ? "off" : $("#update-auto-install").checked ? "auto" : "notify";
   $("#update-auto-install-wrap").hidden = updates === "off";

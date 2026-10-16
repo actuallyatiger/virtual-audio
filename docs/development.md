@@ -64,7 +64,8 @@ allow GitHub Actions to create pull requests.
 
 Only the release workflow builds with `VAM_RELEASE` set. Any other build is a
 test build: its version reads like `0.2.1-dev.010e2aa` (the commit, from
-`VAM_COMMIT`, which CI sets) and it never updates itself.
+`VAM_COMMIT`, which CI sets) and it never updates itself. Settings → Updates
+→ **Install the latest release** swaps it for the latest release by hand.
 
 To try a PR on Windows, download `virtual-audio-mixer-windows-x64` from the
 **Windows release build** job's artifacts (Checks tab, needs a GitHub login)

@@ -11,7 +11,7 @@ don't know.
 
 | Method | Path | Body |
 | --- | --- | --- |
-| GET | `/api/state` | Everything the UI shows, including `version` (with `-dev.<commit>` for a test build), `admin_copy_version` (the Program Files copy's version if there is one, `"unknown"` if it predates versions) and `admin_copy_outdated`, and `update` (`{state, version, notes_url, message}`; `state` is `idle`, `checking`, `up_to_date`, `available`, `downloading`, `ready`, `error` or `unsupported`) with `updates`, the update setting. Each sound has `even_db`, how much even out volumes (`even_sounds`) turns it up or down. |
+| GET | `/api/state` | Everything the UI shows, including `version` (with `-dev.<commit>` for a test build), `admin_copy_version` (the Program Files copy's version if there is one, `"unknown"` if it predates versions) and `admin_copy_outdated`, and `update` (`{state, version, notes_url, message, can_install_release}`; `state` is `idle`, `checking`, `up_to_date`, `available`, `downloading`, `ready`, `error` or `unsupported`) with `updates`, the update setting. Each sound has `even_db`, how much even out volumes (`even_sounds`) turns it up or down. |
 | GET | `/api/devices` | |
 | GET | `/api/apps` | |
 | POST | `/api/sources` | `{"kind":"app","exe":"chrome.exe"}` or `{"kind":"device","device":null}`, plus an optional `"name"`; or `{"kind":"soundboard"}` / `{"kind":"music"}` (one of each) |
@@ -41,6 +41,7 @@ don't know.
 | POST | `/api/quit` | Stops the app. |
 | POST | `/api/update/check` | Checks for an update now (and downloads it, with `updates` on `auto`). |
 | POST | `/api/update/download` | Downloads the update that's out (or retries a failed download). |
+| POST | `/api/update/install-release` | A test build (`update.can_install_release`): replaces it with the latest release, checked like any update, and starts that; this copy then quits. |
 | POST | `/api/update/install` | Installs the downloaded update and starts it; this copy then quits. |
 | GET | `/ws` | WebSocket: pushes `state` on change (including `monitor`, Listen's `{state, message}`) and `meters` about 30 times a second (with `playing`, the sounds playing now, each mic's `mic_level` and `mic_gate_open`, `mic_auto_level_db` for mics with automatic level on, and `music_position_ms`). Send `{"type":"listen","on":true}` to monitor the mix; it plays while any connection has it on, and a connection's request ends when it closes. |
 

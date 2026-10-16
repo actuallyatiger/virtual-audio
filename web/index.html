@@ -374,7 +374,8 @@
       </section>
       <section aria-labelledby="set-up-h">
         <h3 id="set-up-h">Updates</h3>
-        <p class="update-status"><span id="update-status"></span> <button type="button" id="update-check" class="small">Check now</button></p>
+        <p class="update-status"><span id="update-status"></span> <button type="button" id="update-check" class="small">Check now</button>
+          <button type="button" id="update-release" class="small" hidden>Install the latest release</button></p>
         <div id="update-mode">
           <label class="check"><input type="checkbox" id="update-auto-check"> Check automatically</label>
           <label class="check settings-sub" id="update-auto-install-wrap"><input type="checkbox" id="update-auto-install" checked> Download and install automatically</label>
@@ -596,6 +597,7 @@
             <li><b>Restart to update</b>, in the bar at the top, installs a downloaded update. Otherwise it's installed the next time the mixer starts.</li>
             <li><b>Safe:</b> only genuine, signed releases are installed. A check only asks GitHub for the latest version number.</li>
             <li>The copy that starts as administrator updates itself too.</li>
+            <li><b>Test builds</b> don't update themselves. <b>Install the latest release</b>, in Settings → Updates, swaps one for the latest release.</li>
           </ul>
         </section>
 
