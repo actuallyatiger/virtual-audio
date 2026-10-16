@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -52,7 +52,7 @@ jobs:
             os: windows-latest
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -75,7 +75,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Check only new schemas since the last release
@@ -102,7 +102,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -121,11 +121,12 @@ jobs:
       - name: Report coverage
         shell: bash
         run: |
+          cargo llvm-cov report --summary-only | tee summary.txt
           {
             echo "## Test coverage"
             echo
             echo '```'
-            cargo llvm-cov report --summary-only
+            cat summary.txt
             echo '```'
             echo
             echo "Line by line: the coverage-report artifact (html/index.html)."
@@ -133,7 +134,7 @@ jobs:
           cargo llvm-cov report --html --output-dir coverage
           cargo llvm-cov report --lcov --output-path coverage/lcov.info
       - name: Upload the coverage report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-report
           path: coverage
@@ -147,7 +148,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Cache
@@ -160,7 +161,7 @@ jobs:
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Upload the exe
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: virtual-audio-mixer-windows-x64
           path: target/release/virtual-audio-mixer.exe
