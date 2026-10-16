@@ -76,8 +76,8 @@ in `VAMSIG01` (without the signature, installed copies won't update to it).
   and publish with `gh release edit vx.y.z --draft=false --latest`.
 - Never hand-edit `version` in `Cargo.toml` or the manifest outside a release
   PR: release-please owns them.
-- Release PRs opened by the workflow's token don't trigger the CI workflow;
-  `main` was already green, and the release PR only changes the version and
-  changelog. If branch protection ever requires CI checks, the release PR
-  can't merge until release-please runs with a personal access token or a
-  GitHub App token instead.
+- CI on a release PR (opened by `github-actions`) waits for a maintainer's
+  approval ("This workflow requires approval"). It can be skipped: `main`
+  was already green, and the release PR only changes the version and
+  changelog. If branch protection ever requires CI checks, approve the run,
+  or have release-please use a personal access token or a GitHub App token.
