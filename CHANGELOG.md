@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/actuallyatiger/virtual-audio/compare/v0.4.1...v0.5.0) (2026-10-16)
+
+
+### Features
+
+* **update:** install the latest release from a test build ([7ca1216](https://github.com/actuallyatiger/virtual-audio/commit/7ca1216ec7986e9bfdef974bc80845ffc0953cb4))
+
 ## [0.4.1](https://github.com/actuallyatiger/virtual-audio/compare/v0.4.0...v0.4.1) (2026-10-16)
 
 
