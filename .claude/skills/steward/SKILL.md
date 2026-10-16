@@ -16,11 +16,12 @@ trip.
 
 CI (`.github/workflows/ci.yml`) runs in four stages, each after the one
 before: **Lint** (Format; Clippy on Linux and on Windows), **Config schemas**
-(which refuses changes to a released schema), **Test** (on Linux and on
-Windows), then **Build / Windows exe**, whose `virtual-audio-mixer-windows-x64` artifact
-is the `.exe` to try on Windows. A failure on one OS only is usually platform
-code (`#[cfg(windows)]`, paths, timing in
-tests). Fix the cause; never skip or weaken a test to get green. Tests that
+(which refuses changes to a released schema), **Test (Windows)**, which also
+measures coverage (a summary on the run's page, and the `coverage-report`
+artifact), then **Build / Windows exe**, whose `virtual-audio-mixer-windows-x64` artifact
+is the `.exe` to try on Windows. A Clippy failure on one OS only is usually
+platform code (`#[cfg(windows)]`, or the demo backend on Linux); a test
+failure, paths or timing. Fix the cause; never skip or weaken a test to get green. Tests that
 depend on timing should wait for a condition with a generous timeout, not
 sleep a fixed time.
 
