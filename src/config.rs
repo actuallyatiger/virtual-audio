@@ -454,6 +454,70 @@ mod tests {
         }
     }
 
+    /// `config.json` as each release saved it, with every feature set up
+    /// (`testdata/config/<version>.json`, from that release's demo build).
+    /// Each must still load, with nothing lost: from 1.0, breaking this is
+    /// for a major version only. The release skill adds each new release's.
+    #[test]
+    fn every_released_versions_config_still_loads() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/testdata/config");
+        let mut versions = Vec::new();
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let version = path.file_stem().unwrap().to_string_lossy().into_owned();
+            let text = std::fs::read_to_string(&path).unwrap();
+            let config = Config::parse(&text).unwrap_or_else(|e| panic!("{version}: {e}"));
+            // What every version had, as it was set up.
+            let names: Vec<&str> = config.sources.iter().map(|s| s.name.as_str()).collect();
+            assert_eq!(
+                names,
+                [
+                    "Default microphone",
+                    "Second mic",
+                    "Game",
+                    "Soundboard",
+                    "Music"
+                ],
+                "{version}"
+            );
+            let [mic, mic2, app, ..] = &config.sources[..] else {
+                unreachable!()
+            };
+            assert_eq!(mic.kind, SourceKind::Device { device: None }, "{version}");
+            assert_eq!(mic.channel.gain_db, 3.0, "{version}");
+            assert!(mic.processing.noise_suppression && mic.processing.extra_strength);
+            assert_eq!(mic2.processing.gate_mode, GateMode::Manual, "{version}");
+            assert_eq!(mic2.processing.gate_db, -42.0, "{version}");
+            assert!(matches!(&app.kind, SourceKind::App { exe } if !exe.is_empty()));
+            assert!(app.channel.muted, "{version}");
+            assert_eq!(config.master.gain_db, -1.5, "{version}");
+            assert!(config.output.is_some(), "{version}");
+            assert_eq!(config.hotkeys.len(), 3, "{version}");
+            assert_eq!(config.hotkeys[1].target, mic.id, "{version}");
+            let sound = &config.sounds[0];
+            assert_eq!(config.hotkeys[2].target, sound.id, "{version}");
+            assert_eq!(
+                (sound.gain_db, sound.end_ms),
+                (-3.0, Some(1500)),
+                "{version}"
+            );
+            assert!(!config.hear_sounds && config.even_sounds, "{version}");
+            assert_eq!(config.hear_sounds_db, -4.0, "{version}");
+            let music = &config.music;
+            assert_eq!(music.items.len(), 1, "{version}");
+            assert!(music.shuffle && music.duck && music.hear, "{version}");
+            assert_eq!(
+                (music.repeat, music.duck_db),
+                (Repeat::One, -9.0),
+                "{version}"
+            );
+            assert_eq!(config.theme, Theme::Dark, "{version}");
+            versions.push(version);
+        }
+        versions.sort();
+        assert_eq!(versions[..5], ["0.1.0", "0.2.0", "0.2.1", "0.3.0", "0.4.0"]);
+    }
+
     #[test]
     fn source_roundtrip() {
         let s = SourceConfig {
