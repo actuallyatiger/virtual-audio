@@ -23,9 +23,9 @@ cargo build --target x86_64-pc-windows-gnu
 
 ## Checks
 
-Run these before pushing. CI runs fmt, clippy and the tests on Windows and
-Linux; the Windows-target clippy is the Linux stand-in for Windows' own
-clippy run:
+Run these before pushing. CI runs fmt, clippy on Linux and Windows, and the
+tests on Windows only, so the demo backend's tests run only here; the
+Windows-target clippy is the Linux stand-in for Windows' own clippy run:
 
 ```sh
 cargo fmt --check
