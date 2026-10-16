@@ -26,8 +26,6 @@ use std::time::{Duration, Instant};
 
 pub const MASTER: &str = "master";
 const RETRY_DELAY: Duration = Duration::from_secs(3);
-/// How often to try a Bluetooth device again (connecting takes a while).
-const BLUETOOTH_RETRY: Duration = Duration::from_secs(10);
 /// Limits on API input, so a misbehaving local client can't bloat the
 /// config or the 10 ms hotkey poll loop.
 const MAX_NAME_CHARS: usize = 100;
@@ -1761,16 +1759,6 @@ impl Engine {
                         );
                         rt.retry_at = now;
                     }
-                    // Out of range or switched off: try again now and then.
-                    SourceKind::Bluetooth { device } => {
-                        let why = rt.status.lock().unwrap().message.clone();
-                        set_status(
-                            &rt.status,
-                            "waiting",
-                            format!("Waiting for {}: {why}", device.name),
-                        );
-                        rt.retry_at = now + BLUETOOTH_RETRY;
-                    }
                     _ => {
                         // A thread that ends without reporting an error panicked.
                         if rt.status.lock().unwrap().state != "error" {
@@ -1824,10 +1812,6 @@ impl Engine {
                 }
                 SourceKind::Soundboard => Capture::Soundboard(self.player.clone()),
                 SourceKind::Music => Capture::Music(self.music.clone()),
-                SourceKind::Bluetooth { device } => Capture::Backend {
-                    target: CaptureTarget::Bluetooth(device.id.clone()),
-                    processing: None,
-                },
                 SourceKind::App { exe } => match found.get(exe).copied().flatten() {
                     Some(pid) => {
                         tracing::info!("source {:?}: found {exe} as PID {pid}", src.name);
@@ -1909,7 +1893,6 @@ fn push_source(
         (None, SourceKind::Device { device: Some(d) }) => d.name.clone(),
         (None, SourceKind::Device { device: None }) => "Default microphone".into(),
         (None, SourceKind::App { exe }) => display_exe(exe),
-        (None, SourceKind::Bluetooth { device }) => device.name.clone(),
         (None, SourceKind::Soundboard) => "Soundboard".into(),
         (None, SourceKind::Music) => "Music".into(),
     };
@@ -1922,15 +1905,6 @@ fn push_source(
     check_len("name", &name, MAX_NAME_CHARS)?;
     if inner.config.sources.len() >= MAX_SOURCES {
         bail!("too many sources (max {MAX_SOURCES})");
-    }
-    if let SourceKind::Bluetooth { device } = &kind
-        && inner
-            .config
-            .sources
-            .iter()
-            .any(|s| matches!(&s.kind, SourceKind::Bluetooth { device: d } if d.id == device.id))
-    {
-        bail!("that phone is already in the mix");
     }
     let single = matches!(kind, SourceKind::Soundboard | SourceKind::Music);
     if single && inner.config.sources.iter().any(|s| s.kind == kind) {
@@ -2122,10 +2096,7 @@ fn capture_thread(
         }
     };
     tracing::info!("capturing {target} ({})", stream.describe());
-    let (state, message) = stream
-        .status()
-        .unwrap_or_else(|| ("running", stream.describe()));
-    report(state, message);
+    report("running", stream.describe());
     while !stop.load(Ordering::Relaxed) {
         let result = stream.read(&mut |data| match &mut processor {
             Some(p) => p.process(data, &mut |out| push_frames(&mut tx, out)),
@@ -2135,9 +2106,6 @@ fn capture_thread(
             tracing::warn!("capture {target} stopped: {e:#}");
             report("error", format!("{e:#}"));
             return;
-        }
-        if let Some((state, message)) = stream.status() {
-            report(state, message);
         }
     }
 }
@@ -2298,9 +2266,6 @@ mod tests {
         }
         fn default_output(&self) -> Option<DeviceInfo> {
             Some(device("phones"))
-        }
-        fn bluetooth_devices(&self) -> anyhow::Result<Vec<DeviceInfo>> {
-            Ok(Vec::new())
         }
         fn audio_apps(&self) -> anyhow::Result<Vec<AppInfo>> {
             Ok(Vec::new())
@@ -2996,57 +2961,6 @@ mod tests {
             "saved"
         );
         engine.shutdown();
-    }
-
-    #[test]
-    fn a_phone_out_of_range_waits_and_tries_again() {
-        let engine = engine("cable");
-        let phone = engine
-            .add_source(
-                None,
-                SourceKind::Bluetooth {
-                    device: DeviceRef {
-                        id: "bt-1".into(),
-                        name: "Pixel".into(),
-                    },
-                },
-            )
-            .unwrap();
-        let status = || {
-            let state = engine.state();
-            state.sources.into_iter().find(|s| s.id == phone).unwrap()
-        };
-        assert_eq!(status().name, "Pixel");
-        let again = SourceKind::Bluetooth {
-            device: DeviceRef {
-                id: "bt-1".into(),
-                name: "Pixel".into(),
-            },
-        };
-        assert!(
-            engine.add_source(None, again).is_err(),
-            "one source per phone"
-        );
-        // Tests can't capture: like a phone that doesn't answer.
-        for _ in 0..300 {
-            engine.supervise();
-            if status().status.state == "waiting" && status().status.message.contains(':') {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let s = status().status;
-        assert_eq!(s.state, "waiting");
-        assert!(
-            s.message.starts_with("Waiting for Pixel: "),
-            "{}",
-            s.message
-        );
-        let inner = engine.inner.lock().unwrap();
-        assert!(
-            inner.sources[&phone].retry_at > Instant::now() + RETRY_DELAY,
-            "not hammering it"
-        );
     }
 
     #[test]

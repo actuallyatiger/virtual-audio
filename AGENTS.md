@@ -20,7 +20,6 @@ talks to it over JSON and a WebSocket. See
 | Engine: config, supervisor, capture/render/monitor threads | `src/engine.rs` |
 | Mic processing (RNNoise, automatic level, noise gate) | `src/dsp.rs` |
 | Soundboard, music, decoding | `src/soundboard.rs`, `src/music.rs`, `src/decode.rs` |
-| Phones over Bluetooth (a helper process holds the connection) | `src/bluetooth.rs` |
 | Windows audio (unsafe COM) / demo backend | `src/backend/wasapi.rs` / `src/backend/dummy.rs` |
 | HTTP API and WebSocket | `src/server.rs` |
 | Hotkeys, tray, autostart and elevation | `src/hotkeys.rs`, `src/tray.rs`, `src/platform.rs` |

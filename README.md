@@ -19,9 +19,6 @@ It runs as a small tray app and is controlled from a web page served on
   including its child processes (e.g. all of Chrome's tabs). There are no extra
   virtual devices to set up, and the app still plays to your speakers as normal.
   Apps are matched by executable name, so capture resumes when the app restarts.
-- **A phone over Bluetooth**: this PC becomes its Bluetooth speaker and its
-  audio goes into the mix (Windows 10 version 2004 or later; pair it in
-  Windows' Bluetooth settings first). Out of range, it keeps trying.
 - **Any input device** as a source, or "default microphone", which follows the
   Windows default live. Sources that would capture the recording end of the
   output cable (a feedback loop) are refused with an error.
