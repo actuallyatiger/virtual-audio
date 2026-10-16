@@ -40,7 +40,7 @@ jobs:
       contents: read
     steps:
       - name: Check out the tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.release-please.outputs.tag_name }}
           persist-credentials: false
@@ -58,7 +58,7 @@ jobs:
       contents: read
     steps:
       - name: Check out the tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.release-please.outputs.tag_name }}
           persist-credentials: false
@@ -71,7 +71,7 @@ jobs:
         env:
           VAM_RELEASE: "1"
       - name: Upload the exe
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: virtual-audio-mixer
           path: target/release/virtual-audio-mixer.exe
@@ -85,7 +85,7 @@ jobs:
       contents: write
     steps:
       - name: Download the exe
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: virtual-audio-mixer
       # The app only installs updates signed by the release key, and the
