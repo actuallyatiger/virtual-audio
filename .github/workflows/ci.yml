@@ -27,6 +27,29 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
 
+  # Each saved config schema is a released format, like a migration: a PR
+  # may add the next one, never change or remove one (see AGENTS.md). The
+  # tests can't tell an edited schema from a new one, so this compares with
+  # the base branch.
+  config-schemas:
+    name: Config schemas unchanged
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Only new schemas
+        run: |
+          changed=$(git diff --name-status --diff-filter=DMRT "origin/$BASE...HEAD" -- 'docs/config/*.schema.json')
+          if [ -n "$changed" ]; then
+            echo "$changed"
+            echo "::error::A saved config schema was changed or removed. Leave it as it is: raise config::VERSION, add a migration and save the new format as the next v<N>.schema.json."
+            exit 1
+          fi
+        env:
+          BASE: ${{ github.base_ref }}
+
   release-build:
     name: Windows release build
     needs: check
