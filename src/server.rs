@@ -62,7 +62,6 @@ pub fn router(engine: Arc<Engine>, port: u16, quit: Arc<dyn Fn() + Send + Sync>)
         .route("/api/state", get(state))
         .route("/api/devices", get(devices))
         .route("/api/apps", get(apps))
-        .route("/api/bluetooth", get(bluetooth))
         .route("/api/sources", post(add_source))
         .route("/api/sources/order", put(reorder_sources))
         .route(
@@ -221,14 +220,6 @@ async fn devices(State(app): State<App>) -> ApiResult {
     })
     .await?;
     Ok(Json(json!({ "inputs": inputs, "outputs": outputs })).into_response())
-}
-
-async fn bluetooth(State(app): State<App>) -> ApiResult {
-    let devices = blocking(&app, StatusCode::INTERNAL_SERVER_ERROR, |e| {
-        e.backend().bluetooth_devices()
-    })
-    .await?;
-    Ok(Json(json!({ "devices": devices })).into_response())
 }
 
 async fn apps(State(app): State<App>) -> ApiResult {

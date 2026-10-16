@@ -2,7 +2,6 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod backend;
-mod bluetooth;
 mod config;
 mod decode;
 mod dsp;
@@ -174,11 +173,6 @@ fn wait_for_port(port: u16, seconds: u32) -> std::io::Result<std::net::TcpListen
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    // A helper holding a Bluetooth connection for the mixer (see
-    // bluetooth.rs): no port, no logging.
-    if let Some(i) = args.iter().position(|a| a == bluetooth::HOST_FLAG) {
-        return bluetooth::host(args.get(i + 1).map_or("", String::as_str));
-    }
     // Re-launched elevated to register or remove the sign-in task, then exit
     // (see platform.rs). Before anything else: no port, no logging.
     if let Some(i) = args.iter().position(|a| a == "--admin-autostart") {
