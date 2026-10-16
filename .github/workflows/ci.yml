@@ -1,31 +1,68 @@
 name: CI
 
+# Four stages, each waiting for the one before: lint, the saved config
+# schemas, the tests, then the Windows build. A failure says which kind it
+# is, and nothing is built from code that doesn't pass.
+
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+# A newer push to a PR replaces its run. On main a run finishes, and only
+# the newest push waiting behind it runs next.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
-    name: ${{ matrix.os }}
+  # ---------------------------------------------------------------- lint
+
+  format:
+    name: Lint / Format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Check formatting
+        run: cargo fmt --check
+
+  clippy:
+    name: Lint / Clippy (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        include:
+          - name: Linux
+            os: ubuntu-latest
+          # The Windows-only code (WASAPI, the tray, autostart).
+          - name: Windows
+            os: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Check out
+        uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+          components: clippy
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+      - name: Run Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+  # ---------------------------------------------------------------- config
 
   # The schema of each released config format is fixed, like a released
   # migration: a change may add the next one, never change or remove one
@@ -33,13 +70,16 @@ jobs:
   # so this compares with the last release. Until a release has it, a
   # version's schema can still change.
   config-schemas:
-    name: Config schemas unchanged
+    name: Config schemas
+    needs: [format, clippy]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Only new schemas since the last release
+      - name: Check only new schemas since the last release
+        shell: bash
         run: |
           if ! release=$(git describe --tags --abbrev=0 --match 'v*'); then
             echo "No release yet."
@@ -52,22 +92,52 @@ jobs:
             exit 1
           fi
 
-  release-build:
-    name: Windows release build
-    needs: check
+  # ---------------------------------------------------------------- test
+
+  test:
+    name: Test (${{ matrix.name }})
+    needs: config-schemas
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-latest
+          - name: Windows
+            os: windows-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+      - name: Run tests
+        run: cargo test
+
+  # ---------------------------------------------------------------- build
+
+  build:
+    name: Build / Windows exe
+    needs: test
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - name: Check out
+        uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
       # A test build: it shows the commit it was built from and never
       # updates itself (only the release workflow sets VAM_RELEASE).
-      - name: Build
+      - name: Build the exe
         shell: bash
         run: VAM_COMMIT="${HEAD_SHA::7}" cargo build --release
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/upload-artifact@v4
+      - name: Upload the exe
+        uses: actions/upload-artifact@v4
         with:
           name: virtual-audio-mixer-windows-x64
           path: target/release/virtual-audio-mixer.exe

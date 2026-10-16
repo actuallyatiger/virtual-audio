@@ -13,6 +13,7 @@ permissions: {}
 
 jobs:
   release-please:
+    name: Release / Version and changelog
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -22,44 +23,69 @@ jobs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
-      - uses: googleapis/release-please-action@v4
+      - name: Update the release PR, or tag the release
+        uses: googleapis/release-please-action@v4
         id: release
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-  build:
-    name: Windows build
+  # The tag's own code, tested before it's built and published.
+  test:
+    name: Release / Test
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
     runs-on: windows-latest
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out the tag
+        uses: actions/checkout@v4
         with:
           ref: ${{ needs.release-please.outputs.tag_name }}
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Run tests
+        run: cargo test
+
+  build:
+    name: Release / Build Windows exe
+    needs: [release-please, test]
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+          persist-credentials: false
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
       # Only releases are built with VAM_RELEASE: without it, the app is a
       # test build and never updates itself.
-      - run: cargo build --release
+      - name: Build the exe
+        run: cargo build --release
         env:
           VAM_RELEASE: "1"
-      - uses: actions/upload-artifact@v4
+      - name: Upload the exe
+        uses: actions/upload-artifact@v4
         with:
           name: virtual-audio-mixer
           path: target/release/virtual-audio-mixer.exe
           if-no-files-found: error
 
   publish:
-    name: Attach the build and publish
+    name: Release / Sign and publish
     needs: [release-please, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Download the exe
+        uses: actions/download-artifact@v4
         with:
           name: virtual-audio-mixer
       # The app only installs updates signed by the release key, and the
@@ -67,7 +93,8 @@ jobs:
       # appended to the exe, then its length in 8 digits and VAMSIG01, so a
       # release is one file. No key, no release: an unsigned exe would never
       # be installed as an update.
-      - run: sudo apt-get install -y -q minisign
+      - name: Install minisign
+        run: sudo apt-get install -y -q minisign
       - name: Sign
         run: |
           if [ -z "$MINISIGN_SECRET_KEY" ]; then
@@ -89,7 +116,8 @@ jobs:
           TAG: ${{ needs.release-please.outputs.tag_name }}
       # Always named virtual-audio-mixer.exe, so
       # releases/latest/download/virtual-audio-mixer.exe keeps working.
-      - run: |
+      - name: Attach the exe and publish
+        run: |
           gh release upload "$TAG" virtual-audio-mixer.exe --clobber
           gh release edit "$TAG" --draft=false --latest
         env:

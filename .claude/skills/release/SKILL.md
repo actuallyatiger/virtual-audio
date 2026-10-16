@@ -15,11 +15,13 @@ Releases are automated by release-please (`.github/workflows/release.yml`,
    `Cargo.lock`) and adds the commits since the last release to
    `CHANGELOG.md`.
 2. **Merging that PR is the release.** release-please tags `vx.y.z` and
-   makes a draft GitHub Release with that changelog section. The workflow's
-   Windows job builds `virtual-audio-mixer.exe`, and the publish job signs
-   it (appending the signature to the exe, which installed copies check
-   before updating themselves), attaches it and publishes the release, so a
-   published release always has the signed exe.
+   makes a draft GitHub Release with that changelog section. Then the
+   workflow's stages run in turn: **Release / Test** runs the tag's tests,
+   **Release / Build Windows exe** builds `virtual-audio-mixer.exe`, and
+   **Release / Sign and publish** signs it (appending the signature to the
+   exe, which installed copies check before updating themselves), attaches
+   it and publishes the release, so a published release always has the
+   signed exe, and only from code that passed its tests.
 3. `releases/latest/download/virtual-audio-mixer.exe` always points at the newest,
    and the README links there.
 
