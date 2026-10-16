@@ -3,6 +3,12 @@
 The UI's server listens on `http://127.0.0.1:47800` by default (`port` in
 `config.json`).
 
+From 1.0, this API follows the version number like the rest of the app: a
+change that breaks existing callers (removing or renaming an endpoint or a
+field, or changing what one means) waits for a major version. Adding
+endpoints, fields and values doesn't, so callers should ignore what they
+don't know.
+
 | Method | Path | Body |
 | --- | --- | --- |
 | GET | `/api/state` | Everything the UI shows, including `version` (with `-dev.<commit>` for a test build), `admin_copy_version` (the Program Files copy's version if there is one, `"unknown"` if it predates versions) and `admin_copy_outdated`, and `update` (`{state, version, notes_url, message}`; `state` is `idle`, `checking`, `up_to_date`, `available`, `downloading`, `ready`, `error` or `unsupported`) with `updates`, the update setting. Each sound has `even_db`, how much even out volumes (`even_sounds`) turns it up or down. |

@@ -57,6 +57,12 @@ the UI in a headless browser.
   Don't add others.
 - Avoid clicks: every start, stop and jump ramps the gain (a few ms) instead
   of cutting mid-waveform.
+- **No breaking changes without a major version** (from 1.0): every
+  `config.json` an earlier version saved must load (`src/testdata/config/`
+  has one from each release, and the test loading them must keep passing),
+  and the API ([docs/api.md](docs/api.md)) only grows. A change that can't
+  avoid breaking either is a `feat!` with a `BREAKING CHANGE:` footer.
+  When releasing, add the new version's config there (the `release` skill).
 - New config fields go in structs with `#[serde(default)]`, so older
   `config.json` files still load; an enum that may grow falls back to its
   default rather than making the file unreadable. Invalid API input gets a
