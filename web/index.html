@@ -189,7 +189,7 @@
         <button class="listen with-icon" aria-pressed="false" hidden
           title="Hear the mix on your default output"><span data-icon="headphones" aria-hidden="true"></span><span class="label">Listen</span></button>
         <span class="gate" title="Silenced by a hotkey">PTT</span>
-        <button class="ghost icon settings" data-icon="cog" hidden title="Mic processing: noise suppression and noise gate"></button>
+        <button class="ghost icon settings" data-icon="cog" hidden title="Mic settings"></button>
       </div>
       <div class="status monitor-status" hidden></div>
     </article>
@@ -261,7 +261,12 @@
 
   <dialog id="mic-dialog">
     <form method="dialog" class="dialog-body">
-      <h2 id="mic-title">Mic processing</h2>
+      <h2 id="mic-title">Mic settings</h2>
+      <div>
+        <label class="check"><input type="checkbox" id="mic-hear" aria-describedby="mic-hear-hint mic-hear-now"> Hear yourself</label>
+        <p class="hint small" id="mic-hear-hint">Plays this mic to you too, on your default output. Use headphones.</p>
+        <p class="hint small" id="mic-hear-now" role="status"></p>
+      </div>
       <div>
         <label class="check"><input type="checkbox" id="mic-echo" aria-describedby="mic-echo-hint mic-echo-now"> Echo cancellation</label>
         <p class="hint small" id="mic-echo-hint">For speakers: stops others hearing themselves. Not needed with headphones.</p>
@@ -392,7 +397,7 @@
         <a href="#help-start">Getting started</a>
         <a href="#help-apps">Using the mic in other apps</a>
         <a href="#help-sources">Sources and the mixer</a>
-        <a href="#help-mic">Mic processing</a>
+        <a href="#help-mic">Mic settings</a>
         <a href="#help-soundboard">Soundboard</a>
         <a href="#help-music">Music</a>
         <a href="#help-hotkeys">Hotkeys</a>
@@ -422,7 +427,7 @@
           <ul>
             <li><b>Microphone:</b> choose <b>CABLE Output (VB-Audio Virtual Cable)</b>.</li>
             <li><b>Windows default output:</b> keep it on your speakers or headphones, not the cable.</li>
-            <li><b>Turn off the app's own mic processing.</b> Its noise suppression and automatic sensitivity cut out sounds and music. Use <a href="#help-mic">Mic processing</a> here instead.</li>
+            <li><b>Turn off the app's own mic processing.</b> Its noise suppression and automatic sensitivity cut out sounds and music. Use this mixer's <a href="#help-mic">mic settings</a> instead.</li>
           </ul>
           <h4>Discord</h4>
           <p>Settings → Voice &amp; Video:</p>
@@ -454,7 +459,12 @@
                 <li>Windows can't capture a single tab or window.</li>
               </ul>
             </li>
-            <li><b>Mics and inputs:</b> a device, or <i>Default microphone</i>, which follows Windows. The cable's own recording side isn't allowed: it would loop the mix into itself.</li>
+            <li><b>Mics and inputs:</b> a device, or <i>Default microphone</i>, which follows Windows. The cable's own recording side isn't allowed: it would loop the mix into itself.
+              <ul>
+                <li>Others hear it; you don't, unless you turn on <b>Hear yourself</b> in its settings ⚙.</li>
+                <li><b>Mute</b> stops it going to others. Hear yourself still plays it to you.</li>
+              </ul>
+            </li>
             <li><b>Master</b> sets the level of the whole mix. A limiter stops it clipping.</li>
             <li><b>Listen</b> plays the mix on your default output, so you hear what others hear.
               <ul>
@@ -466,9 +476,15 @@
         </section>
 
         <section id="help-mic">
-          <h3>Mic processing</h3>
-          <p>Open it with a mic card's settings ⚙. It only affects that mic.</p>
+          <h3>Mic settings</h3>
+          <p>Open them with a mic card's settings ⚙. They only affect that mic.</p>
           <ul>
+            <li><b>Hear yourself:</b> plays the mic to you too, on your default output, about 50 ms late.
+              <ul>
+                <li>Use headphones, or it can feed back.</li>
+                <li>Off while Listen is on, which already plays you the whole mix.</li>
+              </ul>
+            </li>
             <li><b>Echo cancellation:</b> for speakers. Stops others hearing themselves, or your game, through your mic.
               <ul>
                 <li>Removes what plays on your Windows default output from your mic. That must be your speakers, not the cable.</li>
@@ -559,7 +575,7 @@
             <li><b>Others hear nothing:</b> run <b>Setup check</b>. Check the app uses CABLE Output, and the mic card's meter moves when you talk.</li>
             <li><b>Others say I'm quiet:</b> turn on <b>Automatic level</b> in your mic's settings ⚙. Also ask them to check your <i>User Volume</i> in Discord (right-click your name).</li>
             <li><b>Everything I play ends up in the mic:</b> your Windows default output is the cable. Set it back to your speakers or headphones.</li>
-            <li><b>Listen or Hear sounds won't play:</b> your default output is the device the mix goes to.</li>
+            <li><b>Listen, Hear sounds or Hear yourself won't play:</b> your default output is the device the mix goes to.</li>
             <li><b>The gate cuts out quiet words:</b> use <i>Above a level I set</i> and lower the line.</li>
             <li><b>Hotkeys don't work in a game:</b> see <a href="#help-hotkeys">Hotkeys</a>.</li>
           </ul>

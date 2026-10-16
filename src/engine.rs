@@ -100,6 +100,9 @@ struct SourceRuntime {
     default_id: Option<String>,
     retry_at: Instant,
     echo: EchoReference,
+    /// Where its audio is copied while you hear it, at its own volume.
+    hear_tap: MonitorTap,
+    hear_ctrl: Arc<ChannelControl>,
 }
 
 struct Inner {
@@ -114,6 +117,10 @@ struct Inner {
     /// Just the soundboard on the default output (unless Listen is on,
     /// which already includes it).
     hear: Monitor,
+    /// The sources you hear (mics with Hear on), and which they are: it's
+    /// rebuilt when they change.
+    heard: Monitor,
+    heard_ids: Vec<String>,
     dirty: bool,
     save_error: Option<String>,
     /// Sounds that failed to load at startup, with why.
@@ -236,6 +243,8 @@ pub struct ChannelPatch {
     pub keep_in_time: Option<bool>,
     pub auto_level: Option<bool>,
     pub echo_cancellation: Option<bool>,
+    /// Mics only: play it to you too.
+    pub hear: Option<bool>,
 }
 
 /// The music player for the UI: settings, list and what's playing.
@@ -322,6 +331,9 @@ pub struct SourceView {
     pub status: Status,
     /// What echo cancellation listens to, while it's on.
     pub echo_status: Option<Status>,
+    pub hear: bool,
+    /// Where you hear it, while Hear is on.
+    pub hear_status: Option<Status>,
 }
 
 #[derive(Serialize)]
@@ -443,6 +455,8 @@ impl Engine {
                 listeners: HashSet::new(),
                 listen,
                 hear,
+                heard: Monitor::new("hear sources", Vec::new()),
+                heard_ids: Vec::new(),
                 dirty: false,
                 save_error: None,
                 sound_errors: HashMap::new(),
@@ -508,6 +522,7 @@ impl Engine {
         }
         inner.listen.stop();
         inner.hear.stop();
+        inner.heard.stop();
         self.music.shutdown();
         for rt in inner.sources.values_mut() {
             if let Some(w) = rt.capture.take() {
@@ -546,6 +561,8 @@ impl Engine {
                         .processing
                         .echo_cancellation
                         .then(|| inner.sources[&s.id].echo.status.lock().unwrap().clone()),
+                    hear: s.hear,
+                    hear_status: s.hear.then(|| inner.heard.status.lock().unwrap().clone()),
                 })
                 .collect(),
             hotkeys: inner.config.hotkeys.clone(),
@@ -744,9 +761,14 @@ impl Engine {
             || patch.echo_cancellation.is_some();
         let mut inner = self.inner.lock().unwrap();
         let mut echo_toggled = false;
+        let mut hear_toggled = false;
+        let mut hear_ctrl = None;
         let (channel, ctrl) = if id == MASTER {
             if processing_patch {
                 bail!("mic processing is only for microphones");
+            }
+            if patch.hear.is_some() {
+                bail!("Hear is for mics");
             }
             (&mut inner.config.master, self.master.clone())
         } else {
@@ -755,6 +777,7 @@ impl Engine {
                 .get(id)
                 .ok_or_else(|| anyhow!("no such source"))?;
             let (ctrl, processing) = (rt.ctrl.clone(), rt.processing.clone());
+            hear_ctrl = Some(rt.hear_ctrl.clone());
             let src = inner
                 .config
                 .sources
@@ -763,6 +786,13 @@ impl Engine {
                 .ok_or_else(|| anyhow!("no such source"))?;
             if processing_patch && !matches!(src.kind, SourceKind::Device { .. }) {
                 bail!("mic processing is only for microphones");
+            }
+            if patch.hear.is_some() && !hearable(&src.kind) {
+                bail!("Hear is for mics");
+            }
+            if let Some(on) = patch.hear {
+                hear_toggled = on != src.hear;
+                src.hear = on;
             }
             if let Some(name) = patch.name.filter(|n| !n.trim().is_empty()) {
                 src.name = name.trim().to_owned();
@@ -804,6 +834,10 @@ impl Engine {
         if let Some(db) = patch.gain_db {
             channel.gain_db = db.clamp(-60.0, 12.0);
             ctrl.set_gain(db_to_gain(channel.gain_db));
+            // You hear it at the same volume.
+            if let Some(hear) = &hear_ctrl {
+                hear.set_gain(db_to_gain(channel.gain_db));
+            }
         }
         if let Some(muted) = patch.muted {
             channel.muted = muted;
@@ -812,8 +846,9 @@ impl Engine {
         self.apply_delays(&inner);
         self.bump(&mut inner);
         drop(inner);
-        // Start or stop listening to what you hear now, not at the next tick.
-        if echo_toggled {
+        // Start or stop listening to what you hear, or hearing a mic, now
+        // rather than at the next tick.
+        if echo_toggled || hear_toggled {
             self.supervise();
         }
         Ok(())
@@ -1660,7 +1695,7 @@ impl Engine {
                 pids,
                 wants_default,
                 to_resolve,
-                !inner.listeners.is_empty() || hear_wanted(&inner),
+                !inner.listeners.is_empty() || hear_wanted(&inner) || !heard(&inner).is_empty(),
             )
         };
 
@@ -1705,10 +1740,25 @@ impl Engine {
             .filter_map(|s| inner.sources.get(&s.id))
             .map(|rt| (rt.processing.clone(), rt.ctrl.clone()))
             .collect();
+        // The sources you hear: rebuilt when they change.
+        let heard_ids = heard(&inner);
+        if heard_ids != inner.heard_ids {
+            inner.heard.stop();
+            inner.heard.inputs = heard_ids
+                .iter()
+                .filter_map(|id| inner.sources.get(id))
+                .map(|rt| (rt.hear_tap.clone(), rt.hear_ctrl.clone()))
+                .collect();
+            inner.heard_ids = heard_ids;
+            changed = true;
+        }
         let output = inner.config.output.clone();
         let (listening, hearing) = (!inner.listeners.is_empty(), hear_wanted(&inner));
-        let fields = &mut *inner; // borrow both monitors at once
-        let (listen, hear) = (&mut fields.listen, &mut fields.hear);
+        // Listen already plays the whole mix.
+        let hearing_sources = !listening && !inner.heard_ids.is_empty();
+        let fields = &mut *inner; // borrow the monitors at once
+        let (listen, hear, heard_sources) =
+            (&mut fields.listen, &mut fields.hear, &mut fields.heard);
         changed |= self.supervise_monitor(
             listen,
             listening,
@@ -1718,6 +1768,13 @@ impl Engine {
         );
         changed |=
             self.supervise_monitor(hear, hearing, output.as_ref(), default_output.as_ref(), now);
+        changed |= self.supervise_monitor(
+            heard_sources,
+            hearing_sources,
+            output.as_ref(),
+            default_output.as_ref(),
+            now,
+        );
         let output_name = inner.config.output.as_ref().map(|o| o.name.clone());
         for src in &sources {
             let Some(rt) = inner.sources.get_mut(&src.id) else {
@@ -1844,11 +1901,13 @@ impl Engine {
                 .set_input(&src.id, rt.ctrl.clone(), rx);
             set_status(&rt.status, "waiting", "Starting…");
             let backend = self.backend.clone();
-            let status = rt.status.clone();
+            let (status, hear) = (rt.status.clone(), rt.hear_tap.clone());
             let changed_tx = self.changed.clone();
             rt.capture = Some(Worker::spawn(
                 format!("capture {}", src.name),
-                move |stop| capture_thread(&*backend, target, tx, &status, &stop, &changed_tx),
+                move |stop| {
+                    capture_thread(&*backend, target, tx, &hear, &status, &stop, &changed_tx)
+                },
             ));
             changed = true;
         }
@@ -1916,6 +1975,7 @@ fn push_source(
         name,
         kind,
         channel: Channel::default(),
+        hear: false,
         processing: Processing::default(),
     };
     inner.sources.insert(id.clone(), SourceRuntime::new(&cfg));
@@ -1950,6 +2010,8 @@ impl SourceRuntime {
             default_id: None,
             retry_at: Instant::now(),
             echo: EchoReference::new(),
+            hear_tap: Arc::new(Mutex::new(None)),
+            hear_ctrl: Arc::new(ChannelControl::new(db_to_gain(channel.gain_db), false)),
         }
     }
 }
@@ -2016,6 +2078,23 @@ const HEAR_MUSIC: usize = 1;
 /// The Hear monitor plays while Hear sounds is on with the soundboard in
 /// the mix, or Hear music with the music in it, and Listen is off (Listen
 /// already includes both).
+/// Sources that can be heard as well as sent to others: mics. (The
+/// soundboard and music have their own Hear; apps already play to you.)
+fn hearable(kind: &SourceKind) -> bool {
+    matches!(kind, SourceKind::Device { .. })
+}
+
+/// The sources to play to you, in order.
+fn heard(inner: &Inner) -> Vec<String> {
+    inner
+        .config
+        .sources
+        .iter()
+        .filter(|s| s.hear && hearable(&s.kind))
+        .map(|s| s.id.clone())
+        .collect()
+}
+
 fn hear_wanted(inner: &Inner) -> bool {
     let has = |kind: SourceKind| inner.config.sources.iter().any(|s| s.kind == kind);
     inner.listeners.is_empty()
@@ -2058,6 +2137,7 @@ fn capture_thread(
     backend: &dyn Backend,
     capture: Capture,
     mut tx: rtrb::Producer<f32>,
+    hear: &MonitorTap,
     status: &SharedStatus,
     stop: &AtomicBool,
     changed: &tokio::sync::watch::Sender<u64>,
@@ -2098,9 +2178,18 @@ fn capture_thread(
     tracing::info!("capturing {target} ({})", stream.describe());
     report("running", stream.describe());
     while !stop.load(Ordering::Relaxed) {
+        // To the mix, and to you while you hear it.
+        let mut send = |out: &[f32]| {
+            push_frames(&mut tx, out);
+            if let Ok(mut tap) = hear.try_lock()
+                && let Some(you) = tap.as_mut()
+            {
+                push_frames(you, out);
+            }
+        };
         let result = stream.read(&mut |data| match &mut processor {
-            Some(p) => p.process(data, &mut |out| push_frames(&mut tx, out)),
-            None => push_frames(&mut tx, data),
+            Some(p) => p.process(data, &mut send),
+            None => send(data),
         });
         if let Err(e) = result {
             tracing::warn!("capture {target} stopped: {e:#}");
@@ -2312,6 +2401,7 @@ mod tests {
                     exe: format!("{id}.exe"),
                 },
                 channel: Channel::default(),
+                hear: false,
                 processing: Processing::default(),
             })
             .to_vec();
@@ -2961,6 +3051,64 @@ mod tests {
             "saved"
         );
         engine.shutdown();
+    }
+
+    #[test]
+    fn hearing_a_mic_plays_it_to_you_at_its_volume() {
+        let engine = engine("cable");
+        let mic = engine
+            .add_source(None, SourceKind::Device { device: None })
+            .unwrap();
+        let hear = |on| ChannelPatch {
+            hear: Some(on),
+            ..Default::default()
+        };
+        let status = || {
+            let state = engine.state();
+            state
+                .sources
+                .into_iter()
+                .find(|s| s.id == mic)
+                .unwrap()
+                .hear_status
+        };
+        assert!(status().is_none(), "off by default");
+
+        engine.update_channel(&mic, hear(true)).unwrap();
+        let mut s = status().unwrap();
+        for _ in 0..300 {
+            if s.state == "running" {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+            s = status().unwrap();
+        }
+        assert_eq!(
+            (s.state, s.message.as_str()),
+            ("running", "phones"),
+            "the default output"
+        );
+        let gain = ChannelPatch {
+            gain_db: Some(-6.0),
+            ..Default::default()
+        };
+        engine.update_channel(&mic, gain).unwrap();
+        let ctrl = engine.inner.lock().unwrap().sources[&mic].hear_ctrl.clone();
+        assert!((ctrl.gain() - db_to_gain(-6.0)).abs() < 1e-6, "its volume");
+
+        // Listen plays the whole mix, so it stops meanwhile.
+        engine.set_listening(1, true);
+        assert!(engine.inner.lock().unwrap().heard.worker.is_none());
+        engine.set_listening(1, false);
+        assert!(engine.inner.lock().unwrap().heard.worker.is_some());
+
+        engine.update_channel(&mic, hear(false)).unwrap();
+        assert!(status().is_none());
+        assert!(
+            engine.inner.lock().unwrap().heard.worker.is_none(),
+            "stopped"
+        );
+        assert!(engine.update_channel("a", hear(true)).is_err(), "mics only");
     }
 
     #[test]
