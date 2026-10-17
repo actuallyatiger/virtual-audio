@@ -71,8 +71,9 @@ the UI in a headless browser.
   are done, and says how; CI refuses a PR that changes or removes a saved
   schema instead.
 - New config fields go in structs with `#[serde(default)]`, so older
-  `config.json` files still load; an enum that may grow falls back to its
-  default rather than making the file unreadable. Invalid API input gets a
+  `config.json` files still load; an enum value a newer build may add falls
+  back to the default (or leaves its item out) rather than making the file
+  unreadable. Invalid API input gets a
   plain message: 400 from the handlers (a body that doesn't fit the types
   gets axum's 422). Anything stored is size-limited.
 - `unsafe` is for Win32 calls (mostly `src/backend/wasapi.rs` and
