@@ -43,6 +43,7 @@ pub struct Config {
     pub master: Channel,
     #[serde(deserialize_with = "known_sources")]
     pub sources: Vec<SourceConfig>,
+    #[serde(deserialize_with = "known_hotkeys")]
     pub hotkeys: Vec<Hotkey>,
     /// Soundboard sounds, in display order.
     pub sounds: Vec<SoundConfig>,
@@ -58,10 +59,10 @@ pub struct Config {
     pub autostart_admin: bool,
     pub music: MusicConfig,
     /// The web UI's colours.
-    #[serde(deserialize_with = "theme_or_system")]
+    #[serde(deserialize_with = "known_or_default")]
     pub theme: Theme,
     /// How updates are looked for and fetched.
-    #[serde(deserialize_with = "update_mode_or_auto")]
+    #[serde(deserialize_with = "known_or_default")]
     pub updates: UpdateMode,
 }
 
@@ -80,11 +81,15 @@ pub enum UpdateMode {
     Off,
 }
 
-/// A mode this build doesn't know (written by a newer one) falls back to the
-/// default instead of making the whole file unreadable.
-fn update_mode_or_auto<'de, D: Deserializer<'de>>(d: D) -> Result<UpdateMode, D::Error> {
+/// A value this build doesn't know (an enum value written by a newer one)
+/// falls back to the default instead of making the whole file unreadable.
+fn known_or_default<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+{
     let v = serde_json::Value::deserialize(d)?;
-    Ok(UpdateMode::deserialize(v).unwrap_or_default())
+    Ok(T::deserialize(v).unwrap_or_default())
 }
 
 /// The kinds of source this build knows (`SourceKind`'s tags).
@@ -107,11 +112,21 @@ fn known_sources<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<SourceConfig>, D
     Ok(sources)
 }
 
-/// A theme this build doesn't know (written by a newer one) falls back to
-/// System instead of making the whole file unreadable.
-fn theme_or_system<'de, D: Deserializer<'de>>(d: D) -> Result<Theme, D::Error> {
-    let v = serde_json::Value::deserialize(d)?;
-    Ok(Theme::deserialize(v).unwrap_or_default())
+/// A hotkey for an action this build doesn't know (added by a newer one) is
+/// left out, like a source of an unknown kind.
+fn known_hotkeys<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Hotkey>, D::Error> {
+    let values = Vec::<serde_json::Value>::deserialize(d)?;
+    let mut hotkeys = Vec::new();
+    for v in values {
+        if let Some(action) = v.get("action")
+            && HotkeyAction::deserialize(action).is_err()
+        {
+            tracing::warn!("leaving out a hotkey for {action}, which this version doesn't know");
+            continue;
+        }
+        hotkeys.push(Hotkey::deserialize(v).map_err(serde::de::Error::custom)?);
+    }
+    Ok(hotkeys)
 }
 
 /// The web UI's colours.
@@ -134,6 +149,7 @@ pub struct MusicConfig {
     /// Files and folders, as added.
     pub items: Vec<MusicItem>,
     pub shuffle: bool,
+    #[serde(deserialize_with = "known_or_default")]
     pub repeat: Repeat,
     /// Turn the music down while you talk, by `duck_db`.
     pub duck: bool,
@@ -247,6 +263,7 @@ pub struct SourceConfig {
 pub struct Processing {
     pub noise_suppression: bool,
     pub noise_gate: bool,
+    #[serde(deserialize_with = "known_or_default")]
     pub gate_mode: GateMode,
     /// Manual mode: the gate opens when the level reaches this (dBFS).
     pub gate_db: f32,
@@ -381,14 +398,21 @@ impl Config {
     /// exists but can't be read or parsed.
     pub fn read() -> Result<Option<Self>, String> {
         match std::fs::read_to_string(config_path()) {
-            Ok(text) => Self::parse(&text).map(Some),
+            Ok(text) => {
+                let (config, version) = Self::parse(&text)?;
+                if version > VERSION {
+                    keep_newer(&config_path(), &text, version);
+                }
+                Ok(Some(config))
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e.to_string()),
         }
     }
 
-    /// Reads a config of any version, migrating an older one to this one.
-    fn parse(text: &str) -> Result<Self, String> {
+    /// Reads a config of any version, migrating an older one to this one;
+    /// also returns the version it was saved as.
+    fn parse(text: &str) -> Result<(Self, u32), String> {
         // Notepad and friends may add a UTF-8 byte order mark.
         let mut value: serde_json::Value =
             serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())?;
@@ -408,7 +432,8 @@ impl Config {
         }
         migrate(config, version, MIGRATIONS);
         config.insert("version".into(), VERSION.into());
-        serde_json::from_value(value).map_err(|e| e.to_string())
+        let config = serde_json::from_value(value).map_err(|e| e.to_string())?;
+        Ok((config, version))
     }
 
     /// Moves an unreadable config aside (to `config.<timestamp>.json.bad`,
@@ -440,6 +465,20 @@ impl Config {
         // with MOVEFILE_REPLACE_EXISTING.
         std::fs::rename(tmp, path)?;
         Ok(())
+    }
+}
+
+/// Copies a config a newer build saved (`text`, read from `path`) to
+/// `config.v<version>.json` next to it, once, before this build saves over it
+/// without the settings it doesn't know.
+fn keep_newer(path: &std::path::Path, text: &str, version: u32) {
+    let copy = path.with_file_name(format!("config.v{version}.json"));
+    if copy.exists() {
+        return;
+    }
+    match std::fs::write(&copy, text) {
+        Ok(()) => tracing::info!("kept the newer config as {}", copy.display()),
+        Err(e) => tracing::warn!("couldn't keep the newer config as {}: {e}", copy.display()),
     }
 }
 
@@ -587,10 +626,10 @@ mod tests {
     #[test]
     fn a_config_saved_before_versions_is_version_1() {
         // 0.5.0 and earlier saved no version.
-        let old = Config::parse(r#"{"port":1,"theme":"dark"}"#).unwrap();
+        let (old, version) = Config::parse(r#"{"port":1,"theme":"dark"}"#).unwrap();
         assert_eq!(
-            (old.version, old.port, old.theme),
-            (VERSION, 1, Theme::Dark)
+            (version, old.version, old.port, old.theme),
+            (1, VERSION, 1, Theme::Dark)
         );
         let saved = serde_json::to_value(&old).unwrap();
         assert_eq!(saved["version"], VERSION, "saved with this version");
@@ -622,11 +661,40 @@ mod tests {
 
     #[test]
     fn a_newer_config_still_reads() {
-        let newer = Config::parse(r#"{"version":999,"port":2,"hologram":true}"#).unwrap();
-        assert_eq!((newer.version, newer.port), (VERSION, 2));
+        let (newer, version) =
+            Config::parse(r#"{"version":999,"port":2,"hologram":true}"#).unwrap();
+        assert_eq!((version, newer.version, newer.port), (999, VERSION, 2));
         for bad in [r#"{"version":"two"}"#, r#"{"version":0}"#, r#"[1]"#] {
             assert!(Config::parse(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_newer_builds_hotkeys_and_values_dont_stop_a_config_loading() {
+        let (config, _) = Config::parse(
+            r#"{"hotkeys":[
+                {"id":"a","keys":"F13","action":"toggle_mute","target":"master"},
+                {"id":"b","keys":"F14","action":"summon_cat"}
+            ],"music":{"repeat":"twice"},"sources":[
+                {"id":"m","name":"Mic","kind":"device","device":null,"gate_mode":"psychic"}
+            ]}"#,
+        )
+        .unwrap();
+        let ids: Vec<&str> = config.hotkeys.iter().map(|h| h.id.as_str()).collect();
+        assert_eq!((ids, config.music.repeat), (vec!["a"], Repeat::default()));
+        assert_eq!(config.sources[0].processing.gate_mode, GateMode::default());
+    }
+
+    #[test]
+    fn a_newer_config_is_kept_before_its_saved_over() {
+        let dir = std::env::temp_dir().join(format!("vam-keep-newer-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        keep_newer(&path, "first", 7);
+        keep_newer(&path, "second", 7);
+        let kept = std::fs::read_to_string(dir.join("config.v7.json"));
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(kept.unwrap(), "first", "the newer build's own, not ours");
     }
 
     #[test]
@@ -663,7 +731,7 @@ mod tests {
 
     #[test]
     fn parses_with_bom_and_rejects_garbage() {
-        let cfg = Config::parse("\u{feff}{\"port\": 1234}").unwrap();
+        let (cfg, _) = Config::parse("\u{feff}{\"port\": 1234}").unwrap();
         assert_eq!(cfg.port, 1234);
         assert!(cfg.sources.is_empty(), "missing fields default");
         assert!(Config::parse("{\"sources\": [{\"name\": 1}]}").is_err());
