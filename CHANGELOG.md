@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.0](https://github.com/actuallyatiger/virtual-audio/compare/v0.5.0...v0.6.0) (2026-10-17)
+
+
+### Features
+
+* **config:** version the config format, with migrations ([9d79531](https://github.com/actuallyatiger/virtual-audio/commit/9d79531d2228ce2280cc111d528d4b4fb32d8b4e))
+
+
+### Bug Fixes
+
+* **config:** don't lose a newer build's config ([4c9ed37](https://github.com/actuallyatiger/virtual-audio/commit/4c9ed37cba4623d75718c4adbbc38d86c95b640d))
+
 ## [0.5.0](https://github.com/actuallyatiger/virtual-audio/compare/v0.4.1...v0.5.0) (2026-10-16)
 
 
