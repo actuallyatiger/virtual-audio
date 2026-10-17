@@ -11,4 +11,5 @@ with no `version`, from 0.5.0 or earlier, is version 1. One from a newer
 build is read as far as this build understands it: settings it doesn't know
 are left out, so it first copies the file to `config.v<version>.json`.
 
-Changing the format means a new version: see AGENTS.md.
+A released version's schema never changes; the first change to the format
+after a release makes a new version. See AGENTS.md.

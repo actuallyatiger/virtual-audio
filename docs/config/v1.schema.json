@@ -30,16 +30,11 @@
       "type": "object"
     },
     "GateMode": {
-      "oneOf": [
-        {
-          "const": "auto",
-          "type": "string"
-        },
-        {
-          "const": "manual",
-          "type": "string"
-        }
-      ]
+      "enum": [
+        "auto",
+        "manual"
+      ],
+      "type": "string"
     },
     "Hotkey": {
       "properties": {
@@ -58,34 +53,24 @@
         }
       },
       "required": [
+        "action",
         "id",
-        "keys",
-        "action"
+        "keys"
       ],
       "type": "object"
     },
     "HotkeyAction": {
-      "oneOf": [
-        {
-          "enum": [
-            "toggle_mute",
-            "play_sound",
-            "stop_sounds",
-            "music_play_pause",
-            "music_next",
-            "music_previous"
-          ],
-          "type": "string"
-        },
-        {
-          "const": "push_to_talk",
-          "type": "string"
-        },
-        {
-          "const": "push_to_mute",
-          "type": "string"
-        }
-      ]
+      "enum": [
+        "music_next",
+        "music_play_pause",
+        "music_previous",
+        "play_sound",
+        "push_to_mute",
+        "push_to_talk",
+        "stop_sounds",
+        "toggle_mute"
+      ],
+      "type": "string"
     },
     "MusicConfig": {
       "properties": {
@@ -149,8 +134,8 @@
     },
     "Repeat": {
       "enum": [
-        "off",
         "all",
+        "off",
         "one"
       ],
       "type": "string"
@@ -199,9 +184,9 @@
         }
       },
       "required": [
+        "file",
         "id",
-        "name",
-        "file"
+        "name"
       ],
       "type": "object"
     },
@@ -240,8 +225,8 @@
             }
           },
           "required": [
-            "kind",
-            "exe"
+            "exe",
+            "kind"
           ],
           "type": "object"
         },
@@ -336,35 +321,20 @@
       "type": "object"
     },
     "Theme": {
-      "oneOf": [
-        {
-          "enum": [
-            "light",
-            "dark"
-          ],
-          "type": "string"
-        },
-        {
-          "const": "system",
-          "type": "string"
-        }
-      ]
+      "enum": [
+        "dark",
+        "light",
+        "system"
+      ],
+      "type": "string"
     },
     "UpdateMode": {
-      "oneOf": [
-        {
-          "const": "auto",
-          "type": "string"
-        },
-        {
-          "const": "notify",
-          "type": "string"
-        },
-        {
-          "const": "off",
-          "type": "string"
-        }
-      ]
+      "enum": [
+        "auto",
+        "notify",
+        "off"
+      ],
+      "type": "string"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",

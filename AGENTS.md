@@ -62,20 +62,26 @@ the UI in a headless browser.
   ([docs/api.md](docs/api.md)) only grows. A change that can't avoid
   breaking either is a `feat!` with a `BREAKING CHANGE:` footer.
 - **The config format is versioned**, like a database's migrations
-  (`config::VERSION`, [docs/config](docs/config)). Any change to it (a
-  field added, removed, renamed or retyped, an enum value, a default)
-  raises `VERSION`, adds a migration from the version before to
-  `config::MIGRATIONS` (doing nothing is fine for a new field with a
-  default), and saves the new schema as `docs/config/v<VERSION>.schema.json`
-  next to the old ones. `this_config_format_is_saved` fails until all three
-  are done, and says how; CI refuses a PR that changes or removes a saved
-  schema instead.
+  (`config::VERSION`, [docs/config](docs/config)). The first change to it
+  after a release (a field added, removed, renamed or retyped, an enum
+  value, a default) raises `VERSION`, adds a migration from the version
+  before to `config::MIGRATIONS` (doing nothing is fine for a new field
+  with a default), and saves the new schema as
+  `docs/config/v<VERSION>.schema.json` next to the old ones; later changes
+  before the next release update that schema and migration.
+  `this_config_format_is_saved` fails until that's done, and says how;
+  `every_saved_format_loads_with_nothing_lost` fails if a migration loses a
+  setting (a rename with no migration, say); CI refuses a change to a
+  released schema. A changed default only reaches new users: everyone else
+  keeps the value they saved. Config types are also in the API, so a
+  rename there needs the old name kept for the API.
 - New config fields go in structs with `#[serde(default)]`, so older
   `config.json` files still load; an enum value a newer build may add falls
   back to the default (or leaves its item out) rather than making the file
-  unreadable. Invalid API input gets a
-  plain message: 400 from the handlers (a body that doesn't fit the types
-  gets axum's 422). Anything stored is size-limited.
+  unreadable, which `what_a_newer_build_adds_doesnt_stop_a_config_loading`
+  checks. Invalid API input gets a plain message: 400 from the handlers (a
+  body that doesn't fit the types gets axum's 422). Anything stored is
+  size-limited.
 - `unsafe` is for Win32 calls (mostly `src/backend/wasapi.rs` and
   `src/platform.rs`, plus a few in `src/hotkeys.rs` and `src/tray.rs`), kept
   in small blocks. Check windows-rs semantics against the crate source in the

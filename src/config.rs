@@ -6,11 +6,12 @@ use std::path::PathBuf;
 pub const DEFAULT_PORT: u16 = 47800;
 
 /// The version of the config format, saved in `config.json` as `version`.
-/// Any change to the format (a field added, removed, renamed or retyped, an
-/// enum value, a default) raises it by one, with a migration from the one
-/// before in [`MIGRATIONS`] and the new format's schema saved as
-/// `docs/config/v<VERSION>.schema.json`; the tests hold each change to that.
-/// Configs from before versions (0.5.0 and earlier) are version 1.
+/// The first change to the format after a release (a field added, removed,
+/// renamed or retyped, an enum value, a default) raises it by one, with a
+/// migration from the one before in [`MIGRATIONS`] and the new format's
+/// schema saved as `docs/config/v<VERSION>.schema.json`; the tests hold each
+/// change to that. Configs from before versions (0.5.0 and earlier) are
+/// version 1.
 pub const VERSION: u32 = 1;
 
 /// `MIGRATIONS[n - 1]` turns a version `n` config into version `n + 1`, on
@@ -557,21 +558,59 @@ mod tests {
     }
 
     /// This build's config format, as a JSON Schema: every field, its type,
-    /// its enum values and its default. Doc comments aren't part of the
-    /// format, so they're left out.
+    /// its enum values and its default. What isn't part of the format is
+    /// left out or put in order: doc comments, the order of fields and of
+    /// enum values, and how schemars groups the values (a doc comment on one
+    /// gives it a `oneOf` branch of its own).
     fn schema() -> String {
-        fn without_descriptions(v: &mut serde_json::Value) {
-            match v {
-                serde_json::Value::Object(fields) => {
-                    fields.remove("description");
-                    fields.values_mut().for_each(without_descriptions);
+        use serde_json::Value;
+        fn sorted(values: &mut [Value]) {
+            values.sort_by_key(|v| v.to_string());
+        }
+        /// The strings a `oneOf` allows, if it's only a choice of strings.
+        fn strings(branches: &[Value]) -> Option<Vec<Value>> {
+            let mut values = Vec::new();
+            for branch in branches {
+                let branch = branch.as_object()?;
+                if branch.get("type")? != "string"
+                    || branch
+                        .keys()
+                        .any(|k| !["type", "const", "enum"].contains(&k.as_str()))
+                {
+                    return None;
                 }
-                serde_json::Value::Array(items) => items.iter_mut().for_each(without_descriptions),
+                match (branch.get("const"), branch.get("enum")) {
+                    (Some(value), None) => values.push(value.clone()),
+                    (None, Some(Value::Array(enumerated))) => values.extend(enumerated.clone()),
+                    _ => return None,
+                }
+            }
+            Some(values)
+        }
+        fn normalise(v: &mut Value) {
+            match v {
+                Value::Object(fields) => {
+                    fields.remove("description");
+                    fields.values_mut().for_each(normalise);
+                    if let Some(Value::Array(branches)) = fields.get("oneOf")
+                        && let Some(values) = strings(branches)
+                    {
+                        fields.remove("oneOf");
+                        fields.insert("type".into(), "string".into());
+                        fields.insert("enum".into(), values.into());
+                    }
+                    for list in ["enum", "required"] {
+                        if let Some(Value::Array(values)) = fields.get_mut(list) {
+                            sorted(values);
+                        }
+                    }
+                }
+                Value::Array(items) => items.iter_mut().for_each(normalise),
                 _ => {}
             }
         }
         let mut schema = serde_json::to_value(schemars::schema_for!(Config)).unwrap();
-        without_descriptions(&mut schema);
+        normalise(&mut schema);
         serde_json::to_string_pretty(&schema).unwrap() + "\n"
     }
 
@@ -599,11 +638,13 @@ mod tests {
         std::fs::write(&new, &now).unwrap();
         let next = VERSION + 1;
         panic!(
-            "The config format changed. Raise config::VERSION to {next}, add a migration from \
-             version {VERSION} to config::MIGRATIONS (one that changes nothing is fine for a new \
-             field with a default), and save {} as docs/config/v{next}.schema.json. Keep \
-             v{VERSION}.schema.json.",
-            new.display()
+            "The config format changed. If no release has had version {VERSION} yet, save {new} \
+             over docs/config/v{VERSION}.schema.json (and change its migration to match, if it \
+             has one). Otherwise raise config::VERSION to {next}, add a migration from version \
+             {VERSION} to config::MIGRATIONS (one that changes nothing is fine for a new field \
+             with a default), and save {new} as docs/config/v{next}.schema.json: CI refuses a \
+             change to a released one.",
+            new = new.display()
         );
     }
 
@@ -666,6 +707,207 @@ mod tests {
         assert_eq!((version, newer.version, newer.port), (999, VERSION, 2));
         for bad in [r#"{"version":"two"}"#, r#"{"version":0}"#, r#"[1]"#] {
             assert!(Config::parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    /// What a sample config is for.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Sample {
+        /// Every field, with values other than the defaults where it can.
+        Full,
+        /// Only the fields that have no default.
+        Minimal,
+        /// Every field, plus a field a newer build might add in every object,
+        /// and a value it might add for every enum.
+        Newer,
+    }
+
+    /// Sample configs in the format `schema` describes: between them they
+    /// use every enum value, every kind of source and every hotkey action,
+    /// and both a value and null where a field can be null.
+    fn samples(schema: &serde_json::Value, kind: Sample) -> Vec<serde_json::Value> {
+        use serde_json::{Value, json};
+        let defs = &schema["$defs"];
+        let resolve = |s: &'_ Value| -> Value {
+            match s.get("$ref").and_then(Value::as_str) {
+                Some(r) => defs[r.trim_start_matches("#/$defs/")].clone(),
+                None => s.clone(),
+            }
+        };
+        // The schemas a value can take one of: a `oneOf` or `anyOf`, an
+        // `enum` or a list of types, each enum value as its own `const`.
+        fn alternatives(s: &Value) -> Option<Vec<Value>> {
+            let mut alts = Vec::new();
+            if let Some(Value::Array(branches)) = s.get("oneOf").or_else(|| s.get("anyOf")) {
+                for branch in branches {
+                    alts.extend(alternatives(branch).unwrap_or_else(|| vec![branch.clone()]));
+                }
+            } else if let Some(Value::Array(values)) = s.get("enum") {
+                alts.extend(values.iter().map(|v| json!({ "const": v })));
+            } else if let Some(Value::Array(types)) = s.get("type") {
+                alts.extend(types.iter().map(|t| {
+                    let mut alt = s.clone();
+                    alt["type"] = t.clone();
+                    alt
+                }));
+            } else {
+                return None;
+            }
+            Some(alts)
+        }
+        // The most alternatives anywhere, so `pick`s up to it use them all.
+        fn most(s: &Value) -> usize {
+            let here = alternatives(s).map_or(1, |a| a.len());
+            let below = match s {
+                Value::Object(fields) => fields.values().map(most).max().unwrap_or(1),
+                Value::Array(items) => items.iter().map(most).max().unwrap_or(1),
+                _ => 1,
+            };
+            here.max(below)
+        }
+        fn sample(
+            s: &Value,
+            pick: usize,
+            kind: Sample,
+            resolve: &dyn Fn(&Value) -> Value,
+        ) -> Value {
+            let s = resolve(s);
+            let default = s.get("default");
+            let mut v = if let Some(value) = s.get("const") {
+                value.clone()
+            } else if let Some(alts) = alternatives(&s) {
+                let newer_value = kind == Sample::Newer
+                    && alts
+                        .iter()
+                        .all(|a| a.get("const").is_some_and(Value::is_string));
+                if newer_value {
+                    "from_a_newer_build".into()
+                } else {
+                    sample(&alts[pick % alts.len()], pick, kind, resolve)
+                }
+            } else {
+                match s.get("type").and_then(Value::as_str) {
+                    Some("boolean") => (!default.and_then(Value::as_bool).unwrap_or(false)).into(),
+                    Some("integer") => {
+                        let max = s.get("maximum").and_then(Value::as_u64).unwrap_or(u64::MAX);
+                        let n = (1000 + pick as u64).min(max);
+                        (if Some(n) == default.and_then(Value::as_u64) {
+                            n - 1
+                        } else {
+                            n
+                        })
+                        .into()
+                    }
+                    Some("number") => {
+                        let n = -3.5 - pick as f64;
+                        (if Some(n) == default.and_then(Value::as_f64) {
+                            n - 0.25
+                        } else {
+                            n
+                        })
+                        .into()
+                    }
+                    Some("string") => format!("text {pick}").into(),
+                    Some("array") => {
+                        let items = s.get("items").cloned().unwrap_or_default();
+                        let count = alternatives(&resolve(&items)).map_or(1, |a| a.len());
+                        (0..count)
+                            .map(|i| sample(&items, pick + i, kind, resolve))
+                            .collect()
+                    }
+                    Some("null") => Value::Null,
+                    _ => json!({}),
+                }
+            };
+            if let (Some(Value::Object(properties)), Some(object)) =
+                (s.get("properties"), v.as_object_mut())
+            {
+                let required = s.get("required").and_then(Value::as_array);
+                for (name, property) in properties {
+                    let needed = required.is_some_and(|r| r.contains(&name.as_str().into()));
+                    if kind != Sample::Minimal || needed {
+                        object.insert(name.clone(), sample(property, pick, kind, resolve));
+                    }
+                }
+                if kind == Sample::Newer {
+                    object.insert("from_a_newer_build".into(), true.into());
+                }
+            }
+            v
+        }
+        (0..most(schema))
+            .map(|pick| sample(schema, pick, kind, &resolve))
+            .collect()
+    }
+
+    /// The first place in `want` that `got` lacks or has another value.
+    fn lost(want: &serde_json::Value, got: &serde_json::Value, at: &str) -> Option<String> {
+        use serde_json::Value;
+        match (want, got) {
+            (Value::Object(want), Value::Object(got)) => want.iter().find_map(|(name, w)| {
+                lost(
+                    w,
+                    got.get(name).unwrap_or(&Value::Null),
+                    &format!("{at}.{name}"),
+                )
+            }),
+            (Value::Array(want), Value::Array(got)) if want.len() == got.len() => want
+                .iter()
+                .zip(got)
+                .enumerate()
+                .find_map(|(i, (w, g))| lost(w, g, &format!("{at}[{i}]"))),
+            (Value::Number(w), Value::Number(g)) if w.as_f64() == g.as_f64() => None,
+            _ if want == got => None,
+            _ => Some(format!("{at}: {want} became {got}")),
+        }
+    }
+
+    /// Every format ever saved still loads, with nothing in it lost: sample
+    /// configs in each, after its migrations, keep every value they had. A
+    /// rename with a migration that does nothing fails here, for example.
+    #[test]
+    fn every_saved_format_loads_with_nothing_lost() {
+        for version in 1..=VERSION {
+            let text = std::fs::read_to_string(saved_schema(version)).unwrap();
+            let schema: serde_json::Value = serde_json::from_str(&text).unwrap();
+            for kind in [Sample::Full, Sample::Minimal] {
+                for mut sample in samples(&schema, kind) {
+                    sample["version"] = version.into();
+                    let mut want = sample.clone();
+                    migrate(want.as_object_mut().unwrap(), version, MIGRATIONS);
+                    want["version"] = VERSION.into();
+                    let (config, _) = Config::parse(&sample.to_string()).unwrap_or_else(|e| {
+                        panic!("a v{version} config doesn't load: {e}\n{sample:#}")
+                    });
+                    let got = serde_json::to_value(&config).unwrap();
+                    if let Some(lost) = lost(&want, &got, "config") {
+                        panic!(
+                            "Loading a v{version} config lost {lost}. A migration must move or \
+                             convert it, or remove it if it's meant to go.\n{sample:#}"
+                        );
+                    }
+                    let (again, _) = Config::parse(&got.to_string()).unwrap();
+                    assert_eq!(
+                        serde_json::to_value(again).unwrap(),
+                        got,
+                        "saved and read back"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A config from a newer build still loads: a field this build doesn't
+    /// know is ignored, and a value it doesn't know falls back to the
+    /// default, or leaves its source or hotkey out.
+    #[test]
+    fn what_a_newer_build_adds_doesnt_stop_a_config_loading() {
+        let schema: serde_json::Value = serde_json::from_str(&schema()).unwrap();
+        for mut sample in samples(&schema, Sample::Newer) {
+            sample["version"] = (VERSION + 1).into();
+            if let Err(e) = Config::parse(&sample.to_string()) {
+                panic!("{e}\n{sample:#}");
+            }
         }
     }
 
