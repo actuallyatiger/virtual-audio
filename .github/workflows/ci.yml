@@ -27,28 +27,30 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
 
-  # Each saved config schema is a released format, like a migration: a PR
-  # may add the next one, never change or remove one (see AGENTS.md). The
-  # tests can't tell an edited schema from a new one, so this compares with
-  # the base branch.
+  # The schema of each released config format is fixed, like a released
+  # migration: a change may add the next one, never change or remove one
+  # (see AGENTS.md). The tests can't tell an edited schema from a new one,
+  # so this compares with the last release. Until a release has it, a
+  # version's schema can still change.
   config-schemas:
     name: Config schemas unchanged
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Only new schemas
+      - name: Only new schemas since the last release
         run: |
-          changed=$(git diff --name-status --diff-filter=DMRT "origin/$BASE...HEAD" -- 'docs/config/*.schema.json')
+          if ! release=$(git describe --tags --abbrev=0 --match 'v*'); then
+            echo "No release yet."
+            exit 0
+          fi
+          changed=$(git diff --name-status --diff-filter=DMRT "$release" HEAD -- 'docs/config/*.schema.json')
           if [ -n "$changed" ]; then
             echo "$changed"
-            echo "::error::A saved config schema was changed or removed. Leave it as it is: raise config::VERSION, add a migration and save the new format as the next v<N>.schema.json."
+            echo "::error::A config schema released in $release or earlier was changed or removed. Leave it as it is: raise config::VERSION, add a migration and save the new format as the next v<N>.schema.json."
             exit 1
           fi
-        env:
-          BASE: ${{ github.base_ref }}
 
   release-build:
     name: Windows release build
